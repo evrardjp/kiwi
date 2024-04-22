@@ -181,7 +181,7 @@ target system:
 
       .. code:: bash
 
-          scp pxeboot.{exc_image_base_name_disk}.x86_64-{exc_image_version}.initrd.xz PXE_SERVER_IP:/srv/tftpboot/boot/initrd
+          scp pxeboot.{exc_image_base_name_disk}.x86_64-{exc_image_version}.initrd PXE_SERVER_IP:/srv/tftpboot/boot/initrd
           scp pxeboot.{exc_image_base_name_disk}.x86_64-{exc_image_version}.kernel PXE_SERVER_IP:/srv/tftpboot/boot/linux
 
 3. Copy the disk image, MD5 file, system kernel, initrd and bootoptions to
@@ -392,6 +392,23 @@ oemconfig.oem-unattended Element
   automatically without requiring user interaction. If multiple
   possible target devices are discovered the image is deployed to
   the first device. ``kiwi_oemunattended`` in the initrd
+
+oemconfig.oem-unattended-id Element
+  The target disk device for the installation is selected according
+  to the specified device ID. The device ID corresponds to the name of
+  the device as it exists for the configured `devicepersistency`. By
+  default this is the `by-uuid` device name. If no such representation
+  exist e.g for ramdisk devices, the unix device node can be used
+  to select. The given name must be present in the device list detected
+  by kiwi.
+
+oemconfig.oem-skip-verify Element
+  Do not perform the checksum verification process after install
+  of the image to the target disk. The verification process computes
+  the checksum of the image byte size installed to the target
+  and compares this value with the initrd embedded checksum
+  information at build time of the image. Depending on the size of
+  the image and machine power the computation can take some time.
 
 .. _installmedia_customize:
 

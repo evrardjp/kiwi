@@ -18,6 +18,9 @@ class TestContainerBuilder:
         self.runtime_config.get_max_size_constraint = mock.Mock(
             return_value=None
         )
+        self.runtime_config.get_container_compression = mock.Mock(
+            return_value=False
+        )
         kiwi.builder.container.RuntimeConfig = mock.Mock(
             return_value=self.runtime_config
         )
@@ -39,6 +42,9 @@ class TestContainerBuilder:
         self.xml_state.xml_data.get_name = mock.Mock(
             return_value='image_name'
         )
+        self.xml_state.build_type.get_delta_root = mock.Mock(
+            return_value=False
+        )
         self.setup = mock.Mock()
         kiwi.builder.container.SystemSetup = mock.Mock(
             return_value=self.setup
@@ -58,6 +64,10 @@ class TestContainerBuilder:
             self.xml_state, 'target_dir', 'root_dir'
         )
         self.container.result = mock.Mock()
+
+    @patch('os.path.exists')
+    def setup_method(self, cls, mock_exists):
+        self.setup()
 
     def test_init_derived(self):
         assert self.container.base_image == 'root_dir/image/imported_root'
@@ -119,7 +129,7 @@ class TestContainerBuilder:
         mock_setup.new.return_value = container_setup
         container_image = mock.Mock()
         container_image.create = mock.Mock(
-            return_value='target_dir/image_name.x86_64-1.2.3.docker.tar.xz'
+            return_value='target_dir/image_name.x86_64-1.2.3.docker.tar'
         )
         mock_image.new.return_value = container_image
         self.setup.export_package_verification.return_value = '.verified'
@@ -135,12 +145,12 @@ class TestContainerBuilder:
             'docker', 'root_dir', self.container_config
         )
         container_image.create.assert_called_once_with(
-            'target_dir/image_name.x86_64-1.2.3.docker.tar', None
+            'target_dir/image_name.x86_64-1.2.3.docker.tar', '', True, False
         )
         assert self.container.result.add.call_args_list == [
             call(
                 key='container',
-                filename='target_dir/image_name.x86_64-1.2.3.docker.tar.xz',
+                filename='target_dir/image_name.x86_64-1.2.3.docker.tar',
                 use_for_bundle=True,
                 compress=False,
                 shasum=True
@@ -190,7 +200,7 @@ class TestContainerBuilder:
 
         container_image = mock.Mock()
         container_image.create = mock.Mock(
-            return_value='target_dir/image_name.x86_64-1.2.3.docker.tar.xz'
+            return_value='target_dir/image_name.x86_64-1.2.3.docker.tar'
         )
         mock_image.new.return_value = container_image
 
@@ -221,12 +231,13 @@ class TestContainerBuilder:
         )
         container_image.create.assert_called_once_with(
             'target_dir/image_name.x86_64-1.2.3.docker.tar',
-            'root_dir/image/imported_root'
+            'root_dir/image/imported_root',
+            True, False
         )
         assert container.result.add.call_args_list == [
             call(
                 key='container',
-                filename='target_dir/image_name.x86_64-1.2.3.docker.tar.xz',
+                filename='target_dir/image_name.x86_64-1.2.3.docker.tar',
                 use_for_bundle=True,
                 compress=False,
                 shasum=True
@@ -287,3 +298,40 @@ class TestContainerBuilder:
                 )
                 container.create()
                 assert 'open failed' in str(e)
+
+    @patch('kiwi.builder.container.Checksum')
+    @patch('kiwi.builder.container.ContainerImage')
+    @patch('os.path.exists')
+    def test_create_keep_tmpdirs(self, mock_exists, mock_image, mock_checksum):
+        def side_effect(filename):
+            if filename.endswith('.config/kiwi/config.yml'):
+                return False
+            elif filename.endswith('etc/kiwi.yml'):
+                return False
+            else:
+                return True
+
+        mock_exists.side_effect = side_effect
+
+        container_image = mock.Mock()
+        container_image.create = mock.Mock(
+            return_value='target_dir/image_name.x86_64-1.2.3.docker.tar'
+        )
+        mock_image.new.return_value = container_image
+
+        self.xml_state.build_type.get_ensure_empty_tmpdirs = mock.Mock(
+            return_value=False
+        )
+
+        container = ContainerBuilder(
+            self.xml_state, 'target_dir', 'root_dir'
+        )
+        container.result = mock.Mock()
+
+        container.create()
+
+        container_image.create.assert_called_once_with(
+            'target_dir/image_name.x86_64-1.2.3.docker.tar',
+            'root_dir/image/imported_root',
+            False, False
+        )

@@ -71,6 +71,23 @@ class BlockID:
         """
         return self.get_blkid('TYPE')
 
+    def get_partition_count(self) -> int:
+        """
+        Retrieve number of partitions from block device
+
+        :return: A number
+
+        :rtype: int
+        """
+        partition_count = 0
+        lsblk_result = Command.run(
+            ['lsblk', '-r', '-o', 'NAME,TYPE', self.device]
+        )
+        for line in lsblk_result.output.strip().split(os.linesep):
+            if line.strip().endswith('part'):
+                partition_count += 1
+        return partition_count
+
     def get_blkid(self, id_type):
         """
         Retrieve information for specified metadata ID from block device
@@ -82,6 +99,7 @@ class BlockID:
         :rtype: str
         """
         blkid_result = Command.run(
-            ['blkid', self.device, '-s', id_type, '-o', 'value']
+            ['blkid', self.device, '-s', id_type, '-o', 'value'],
+            raise_on_error=False
         )
-        return blkid_result.output.strip(os.linesep)
+        return blkid_result.output.strip(os.linesep) if blkid_result else ''

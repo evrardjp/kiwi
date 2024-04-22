@@ -32,6 +32,9 @@ class TestPackageManagerZypper:
         self.chroot_command_env['ZYPP_CONF'] = \
             Path.move_to_root('root-dir', [zypp_conf])[0]
 
+    def setup_method(self, cls):
+        self.setup()
+
     def test_request_package(self):
         self.manager.request_package('name')
         assert self.manager.package_requests == ['name']
@@ -47,6 +50,9 @@ class TestPackageManagerZypper:
     def test_request_package_exclusion(self):
         self.manager.request_package_exclusion('name')
         assert self.manager.exclude_requests == ['name']
+
+    def test_setup_repository_modules(self):
+        self.manager.setup_repository_modules({})
 
     @patch('kiwi.command.Command.call')
     def test_process_install_requests_bootstrap(self, mock_call):
@@ -82,7 +88,8 @@ class TestPackageManagerZypper:
             ['chroot', 'root-dir', 'zypper'] + self.chroot_zypper_args + [
                 'install', '--download', 'in-advance',
                 '--auto-agree-with-licenses'
-            ] + self.manager.custom_args + ['--', 'vim'], self.chroot_command_env
+            ] + self.manager.custom_args + ['--', 'vim'],
+            self.chroot_command_env
         )
 
     @patch('kiwi.command.Command.call')
@@ -114,7 +121,7 @@ class TestPackageManagerZypper:
         mock_run.side_effect = Exception
         self.manager.request_package('vim')
         with raises(KiwiRequestError):
-            self.manager.process_delete_requests()
+            self.manager.process_delete_requests(force=True)
         mock_run.assert_called_once_with(
             ['chroot', 'root-dir', 'rpm', '-q', 'vim']
         )
@@ -151,6 +158,7 @@ class TestPackageManagerZypper:
         rpmdb.has_rpm.return_value = True
         mock_RpmDataBase.return_value = rpmdb
         self.manager.post_process_install_requests_bootstrap()
+        rpmdb.rebuild_database.assert_called_once_with()
         rpmdb.set_database_to_image_path.assert_called_once_with()
 
     def test_has_failed(self):

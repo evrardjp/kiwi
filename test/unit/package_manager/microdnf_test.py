@@ -1,4 +1,6 @@
-from mock import patch
+from mock import (
+    patch, call
+)
 from pytest import raises
 import mock
 
@@ -26,6 +28,9 @@ class TestPackageManagerMicroDnf:
         }
         self.manager = PackageManagerMicroDnf(repository)
 
+    def setup_method(self, cls):
+        self.setup()
+
     def test_request_package(self):
         self.manager.request_package('name')
         assert self.manager.package_requests == ['name']
@@ -41,6 +46,49 @@ class TestPackageManagerMicroDnf:
     def test_request_package_exclusion(self):
         self.manager.request_package_exclusion('name')
         assert self.manager.exclude_requests == ['name']
+
+    @patch('kiwi.command.Command.run')
+    def test_setup_repository_modules(self, mock_run):
+        self.manager.setup_repository_modules(
+            {
+                'disable': ['mod_c'],
+                'enable': ['mod_a:stream', 'mod_b']
+            }
+        )
+        microdnf_call_args = [
+            'microdnf', '--refresh', '--config', '/root-dir/dnf.conf',
+            '-y', '--installroot', '/root-dir', '--releasever=0',
+            '--noplugins', '--setopt=cachedir=cache',
+            '--setopt=reposdir=repos',
+            '--setopt=varsdir=vars'
+        ]
+        assert mock_run.call_args_list == [
+            call(
+                microdnf_call_args + [
+                    'module', 'disable', 'mod_c'
+                ], ['env']
+            ),
+            call(
+                microdnf_call_args + [
+                    'module', 'reset', 'mod_a'
+                ], ['env']
+            ),
+            call(
+                microdnf_call_args + [
+                    'module', 'enable', 'mod_a:stream'
+                ], ['env']
+            ),
+            call(
+                microdnf_call_args + [
+                    'module', 'reset', 'mod_b'
+                ], ['env']
+            ),
+            call(
+                microdnf_call_args + [
+                    'module', 'enable', 'mod_b'
+                ], ['env']
+            )
+        ]
 
     @patch('kiwi.command.Command.call')
     @patch('kiwi.command.Command.run')
@@ -68,7 +116,7 @@ class TestPackageManagerMicroDnf:
         mock_call.assert_called_once_with(
             [
                 'chroot', '/root-dir', 'microdnf', '--config', '/dnf.conf',
-                '-y', '--exclude=skipme', 'install', 'vim'
+                '-y', '--releasever=0', '--exclude=skipme', 'install', 'vim'
             ], ['env']
         )
 
@@ -95,7 +143,8 @@ class TestPackageManagerMicroDnf:
         mock_call.assert_called_once_with(
             [
                 'chroot', '/root-dir', 'microdnf',
-                '--config', '/dnf.conf', '-y', 'remove', 'vim'
+                '--config', '/dnf.conf', '-y',
+                '--releasever=0', 'remove', 'vim'
             ],
             ['env']
         )
@@ -108,7 +157,7 @@ class TestPackageManagerMicroDnf:
         mock_run.side_effect = Exception
         self.manager.request_package('vim')
         with raises(KiwiRequestError):
-            self.manager.process_delete_requests()
+            self.manager.process_delete_requests(force=True)
         mock_run.assert_called_once_with(
             ['chroot', '/root-dir', 'rpm', '-q', 'vim']
         )
@@ -119,7 +168,7 @@ class TestPackageManagerMicroDnf:
         mock_call.assert_called_once_with(
             [
                 'chroot', '/root-dir', 'microdnf',
-                '--config', '/dnf.conf', '-y', 'upgrade'
+                '--config', '/dnf.conf', '-y', '--releasever=0', 'upgrade'
             ], ['env']
         )
 
@@ -146,6 +195,7 @@ class TestPackageManagerMicroDnf:
         rpmdb.has_rpm.return_value = True
         mock_RpmDataBase.return_value = rpmdb
         self.manager.post_process_install_requests_bootstrap()
+        rpmdb.rebuild_database.assert_called_once_with()
         rpmdb.set_database_to_image_path.assert_called_once_with()
 
     @patch('kiwi.package_manager.microdnf.Rpm')

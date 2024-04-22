@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 
-<image schemaversion="7.4" name="kiwi-test-image-disk-simple" displayname="Simple Disk">
+<image schemaversion="7.5" name="kiwi-test-image-disk-simple" displayname="Simple Disk">
     <description type="system">
         <author>Marcus Schäfer</author>
         <contact>ms@suse.com</contact>
@@ -14,7 +14,7 @@
         <timezone>Europe/Berlin</timezone>
         <rpm-excludedocs>true</rpm-excludedocs>
         <rpm-check-signatures>false</rpm-check-signatures>
-        <bootsplash-theme>bgrt</bootsplash-theme>
+        <bootsplash-theme>breeze</bootsplash-theme>
         <bootloader-theme>openSUSE</bootloader-theme>
         <type image="oem" filesystem="ext3" kernelcmdline="console=ttyS0" firmware="uefi" format="vmdk">
             <oemconfig>
@@ -33,7 +33,8 @@
         <package name="patterns-base-minimal_base"/>
         <package name="bind-utils"/>
         <package name="systemd"/>
-        <package name="plymouth-theme-bgrt"/>
+        <package name="plymouth-theme-breeze"/>
+        <package name="plymouth-plugin-script"/>
         <package name="grub2-branding-openSUSE"/>
         <package name="iputils"/>
         <package name="vim"/>

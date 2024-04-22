@@ -17,6 +17,7 @@
 #
 import glob
 import os
+import re
 import logging
 
 # project
@@ -51,6 +52,7 @@ class BootLoaderInstallGrub2(BootLoaderInstallBase):
                 {
                     'target_removable': bool,
                     'system_volumes': list_of_volumes,
+                    'system_root_volume': root volume name if required
                     'firmware': FirmWare_instance,
                     'efi_device': string,
                     'boot_device': string,
@@ -61,6 +63,7 @@ class BootLoaderInstallGrub2(BootLoaderInstallBase):
         self.arch = Defaults.get_platform_name()
         self.custom_args = custom_args
         self.install_arguments = []
+        self.shim_install_arguments = []
         self.firmware = None
         self.efi_mount = None
         self.root_mount = None
@@ -69,14 +72,21 @@ class BootLoaderInstallGrub2(BootLoaderInstallBase):
         self.proc_mount = None
         self.sysfs_mount = None
         self.volumes = None
+        self.root_volume_name = None
         self.volumes_mount = []
         self.target_removable = None
         if custom_args and 'target_removable' in custom_args:
             self.target_removable = custom_args['target_removable']
         if custom_args and 'system_volumes' in custom_args:
             self.volumes = custom_args['system_volumes']
+        if custom_args and 'system_root_volume' in custom_args:
+            self.root_volume_name = custom_args['system_root_volume']
         if custom_args and 'firmware' in custom_args:
             self.firmware = custom_args['firmware']
+        if custom_args and 'install_options' in custom_args:
+            self.install_arguments = custom_args['install_options']
+        if custom_args and 'shim_options' in custom_args:
+            self.shim_install_arguments = custom_args['shim_options']
 
         if self.firmware and self.firmware.efi_mode():
             if not custom_args or 'efi_device' not in custom_args:
@@ -203,28 +213,6 @@ class BootLoaderInstallGrub2(BootLoaderInstallBase):
                     'grub2-zipl-setup', '--keep'
                 ]
             )
-            zipl_config_file = ''.join(
-                [
-                    self.root_mount.mountpoint, '/boot/zipl/config'
-                ]
-            )
-            zipl2grub_config_file_orig = ''.join(
-                [
-                    self.root_mount.mountpoint,
-                    '/etc/default/zipl2grub.conf.in.orig'
-                ]
-            )
-            if os.path.exists(zipl2grub_config_file_orig):
-                Command.run(
-                    [
-                        'mv', zipl2grub_config_file_orig,
-                        zipl2grub_config_file_orig.replace('.orig', '')
-                    ]
-                )
-            if os.path.exists(zipl_config_file):
-                Command.run(
-                    ['mv', zipl_config_file, zipl_config_file + '.kiwi']
-                )
         else:
             Command.run(
                 [
@@ -239,6 +227,31 @@ class BootLoaderInstallGrub2(BootLoaderInstallBase):
                     '--modules', self.modules,
                     self.install_device
                 ]
+            )
+        # Cleanup temporary modified zipl template and config files
+        # back to its original state or lave a .kiwi copy for
+        # reference in the system
+        zipl_config_file = ''.join(
+            [
+                self.root_mount.mountpoint, '/boot/zipl/config'
+            ]
+        )
+        zipl2grub_config_file_orig = ''.join(
+            [
+                self.root_mount.mountpoint,
+                '/etc/default/zipl2grub.conf.in.orig'
+            ]
+        )
+        if os.path.exists(zipl2grub_config_file_orig):
+            Command.run(
+                [
+                    'mv', zipl2grub_config_file_orig,
+                    zipl2grub_config_file_orig.replace('.orig', '')
+                ]
+            )
+        if os.path.exists(zipl_config_file):
+            Command.run(
+                ['mv', zipl_config_file, zipl_config_file + '.kiwi']
             )
 
     def secure_boot_install(self):
@@ -265,19 +278,41 @@ class BootLoaderInstallGrub2(BootLoaderInstallBase):
                 Command.run(
                     [
                         'chroot', self.root_mount.mountpoint,
-                        'shim-install', '--removable',
+                        'shim-install', '--removable'
+                    ] + self.shim_install_arguments + [
                         self.device
                     ]
                 )
                 # restore the grub installer noop
                 self._enable_grub2_install(self.root_mount.mountpoint)
 
+    def set_disk_password(self, password: str):
+        if self.root_mount and password is not None:
+            log.debug('Include cryptomount credentials...')
+            config_file = '{0}/boot/efi/EFI/BOOT/grub.cfg'.format(
+                self.root_mount.mountpoint
+            )
+            if os.path.isfile(config_file):
+                with open(config_file) as config:
+                    grub_config = config.read()
+                    grub_config = re.sub(
+                        r'cryptomount',
+                        f'cryptomount -p "{password}"',
+                        grub_config
+                    )
+                with open(config_file, 'w') as grub_config_file:
+                    grub_config_file.write(grub_config)
+                    log.debug(f'<<< {grub_config} >>>')
+
     def _mount_device_and_volumes(self):
         if self.root_mount is None:
             self.root_mount = MountManager(
                 device=self.custom_args['root_device']
             )
-            self.root_mount.mount()
+            custom_root_mount_args = []
+            if self.root_volume_name and self.root_volume_name != '/':
+                custom_root_mount_args += [f'subvol={self.root_volume_name}']
+            self.root_mount.mount(options=custom_root_mount_args)
 
         if self.boot_mount is None:
             if 's390' in self.arch:
@@ -335,37 +370,44 @@ class BootLoaderInstallGrub2(BootLoaderInstallBase):
         if os.access(root_path, os.W_OK):
             grub2_install = ''.join(
                 [
-                    root_path, '/usr/sbin/',
+                    '/usr/sbin/',
                     self._get_grub2_install_tool_name(root_path)
                 ]
             )
             grub2_install_backup = ''.join(
                 [grub2_install, '.orig']
             )
-            grub2_install_noop = ''.join(
-                [root_path, '/bin/true']
+            grub2_install_noop = '/bin/true'
+            Command.run(
+                [
+                    'chroot', root_path,
+                    'cp', '-p', grub2_install, grub2_install_backup
+                ]
             )
             Command.run(
-                ['cp', '-p', grub2_install, grub2_install_backup]
-            )
-            Command.run(
-                ['cp', grub2_install_noop, grub2_install]
+                [
+                    'chroot', root_path,
+                    'cp', grub2_install_noop, grub2_install
+                ]
             )
 
     def _enable_grub2_install(self, root_path):
         if os.access(root_path, os.W_OK):
             grub2_install = ''.join(
                 [
-                    root_path, '/usr/sbin/',
+                    '/usr/sbin/',
                     self._get_grub2_install_tool_name(root_path)
                 ]
             )
             grub2_install_backup = ''.join(
                 [grub2_install, '.orig']
             )
-            if os.path.exists(grub2_install_backup):
+            if os.path.exists(''.join([root_path, grub2_install_backup])):
                 Command.run(
-                    ['mv', grub2_install_backup, grub2_install]
+                    [
+                        'chroot', root_path,
+                        'mv', grub2_install_backup, grub2_install
+                    ]
                 )
 
     def _get_grub2_install_tool_name(self, root_path):

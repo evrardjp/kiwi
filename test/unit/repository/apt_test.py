@@ -8,7 +8,7 @@ from kiwi.repository.apt import RepositoryApt
 
 
 class TestRepositoryApt:
-    @patch('kiwi.repository.apt.NamedTemporaryFile')
+    @patch('kiwi.repository.apt.Temporary.new_file')
     @patch('kiwi.repository.apt.PackageManagerTemplateAptGet')
     @patch('kiwi.repository.apt.Path.create')
     def setup(self, mock_path, mock_template, mock_temp):
@@ -50,11 +50,18 @@ class TestRepositoryApt:
             assert repo.custom_args == []
             assert repo.unauthenticated == 'true'
 
+    @patch('kiwi.repository.apt.Temporary.new_file')
+    @patch('kiwi.repository.apt.PackageManagerTemplateAptGet')
+    @patch('kiwi.repository.apt.Path.create')
+    def setup_method(self, cls, mock_path, mock_template, mock_temp):
+        self.setup()
+
     def test_use_default_location(self):
         template = mock.Mock()
         template.substitute.return_value = 'template-data'
         self.apt_conf.get_image_template.return_value = template
-        self.repo.use_default_location()
+        with patch('builtins.open', create=True):
+            self.repo.use_default_location()
         assert self.repo.shared_apt_get_dir['sources-dir'] == \
             '../data/etc/apt/sources.list.d'
         assert self.repo.shared_apt_get_dir['preferences-dir'] == \
@@ -77,23 +84,44 @@ class TestRepositoryApt:
         self.repo.setup_package_database_configuration()
 
     @patch('os.path.exists')
-    def test_add_repo_with_priority(self, mock_exists):
+    @patch('kiwi.command.Command.run')
+    def test_add_repo_with_priority(self, mock_Command_run, mock_exists):
         mock_exists.return_value = True
         with patch('builtins.open', create=True) as mock_open:
             mock_open.return_value = MagicMock(spec=io.IOBase)
             file_handle = mock_open.return_value.__enter__.return_value
             self.repo.add_repo(
-                'foo', '/srv/my-repo', 'deb', '42', 'xenial', 'a b'
+                'foo', '/srv/my-repo', 'deb', '42', 'xenial', 'a b',
+                customization_script='custom_script'
             )
             assert mock_open.call_args_list == [
-                call('/shared-dir/apt-get/sources.list.d/foo.list', 'w'),
+                call('/shared-dir/apt-get/sources.list.d/foo.sources', 'w'),
                 call('/shared-dir/apt-get/preferences.d/foo.pref', 'w')
             ]
             assert file_handle.write.call_args_list == [
-                call('deb file:/srv/my-repo xenial a b\n'),
+                call(
+                    'Types: deb\n'
+                    'URIs: file:/srv/my-repo\n'
+                    'Suites: xenial\n'
+                    'Components: a b\n'
+                ),
                 call('Package: *\n'),
                 call('Pin: origin ""\n'),
                 call('Pin-Priority: 42\n')
+            ]
+            assert mock_Command_run.call_args_list == [
+                call(
+                    [
+                        'bash', '--norc', 'custom_script',
+                        '/shared-dir/apt-get/sources.list.d/foo.sources'
+                    ]
+                ),
+                call(
+                    [
+                        'bash', '--norc', 'custom_script',
+                        '/shared-dir/apt-get/preferences.d/foo.pref'
+                    ]
+                )
             ]
         mock_exists.return_value = False
         with patch('builtins.open', create=True) as mock_open:
@@ -106,8 +134,10 @@ class TestRepositoryApt:
             )
             assert file_handle.write.call_args_list == [
                 call(
-                    'deb http://download.opensuse.org/repositories/'
-                    'V:/A:/C/Debian_9.0/ xenial a b\n'
+                    'Types: deb\n'
+                    'URIs: http://download.opensuse.org/repositories/V:/A:/C/Debian_9.0/\n'
+                    'Suites: xenial\n'
+                    'Components: a b\n'
                 ),
                 call('Package: *\n'),
                 call('Pin: origin "download.opensuse.org"\n'),
@@ -124,10 +154,13 @@ class TestRepositoryApt:
                 'foo', 'kiwi_iso_mount/uri', 'deb', None, 'xenial', 'a b'
             )
             file_handle.write.assert_called_once_with(
-                'deb file:/kiwi_iso_mount/uri xenial a b\n'
+                'Types: deb\n'
+                'URIs: file:/kiwi_iso_mount/uri\n'
+                'Suites: xenial\n'
+                'Components: a b\n'
             )
             mock_open.assert_called_once_with(
-                '/shared-dir/apt-get/sources.list.d/foo.list', 'w'
+                '/shared-dir/apt-get/sources.list.d/foo.sources', 'w'
             )
 
     @patch('os.path.exists')
@@ -141,10 +174,15 @@ class TestRepositoryApt:
                 repo_gpgcheck=False, pkg_gpgcheck=False
             )
             file_handle.write.assert_called_once_with(
-                'deb [trusted=yes check-valid-until=no] file:/kiwi_iso_mount/uri xenial a b\n'
+                'Types: deb\n'
+                'URIs: file:/kiwi_iso_mount/uri\n'
+                'Suites: xenial\n'
+                'Components: a b\n'
+                'trusted: yes\n'
+                'check-valid-until: no\n'
             )
             mock_open.assert_called_once_with(
-                '/shared-dir/apt-get/sources.list.d/foo.list', 'w'
+                '/shared-dir/apt-get/sources.list.d/foo.sources', 'w'
             )
 
     @patch('os.path.exists')
@@ -157,10 +195,13 @@ class TestRepositoryApt:
                 'foo', '/kiwi_iso_mount/uri', 'deb', None, 'xenial'
             )
             file_handle.write.assert_called_once_with(
-                'deb file:/kiwi_iso_mount/uri xenial main\n'
+                'Types: deb\n'
+                'URIs: file:/kiwi_iso_mount/uri\n'
+                'Suites: xenial\n'
+                'Components: main\n'
             )
             mock_open.assert_called_once_with(
-                '/shared-dir/apt-get/sources.list.d/foo.list', 'w'
+                '/shared-dir/apt-get/sources.list.d/foo.sources', 'w'
             )
 
     @patch('os.path.exists')
@@ -173,10 +214,12 @@ class TestRepositoryApt:
                 'foo', 'http://repo.com', 'deb'
             )
             file_handle.write.assert_called_once_with(
-                'deb http://repo.com ./\n'
+                'Types: deb\n'
+                'URIs: http://repo.com\n'
+                'Suites: ./\n'
             )
             mock_open.assert_called_once_with(
-                '/shared-dir/apt-get/sources.list.d/foo.list', 'w'
+                '/shared-dir/apt-get/sources.list.d/foo.sources', 'w'
             )
 
     @patch('kiwi.repository.apt.os.unlink')
@@ -209,7 +252,7 @@ class TestRepositoryApt:
     def test_delete_repo(self, mock_wipe):
         self.repo.delete_repo('foo')
         mock_wipe.assert_called_once_with(
-            '/shared-dir/apt-get/sources.list.d/foo.list'
+            '/shared-dir/apt-get/sources.list.d/foo.sources'
         )
 
     @patch('kiwi.path.Path.wipe')

@@ -8,7 +8,11 @@ from kiwi.solver.repository.base import SolverRepositoryBase
 class TestSolverRepositoryDeb:
     def setup(self):
         self.uri = Mock()
+        self.uri.uri = 'http://example.org/some/path'
         self.solver = SolverRepositoryDeb(self.uri)
+
+    def setup_method(self, cls):
+        self.setup()
 
     @patch.object(SolverRepositoryBase, '_get_deb_packages')
     @patch.object(SolverRepositoryBase, '_create_solvables')

@@ -40,6 +40,7 @@ class TestKisBuilder:
         self.filesystem.root_uuid = 'some_uuid'
         mock_filesystem.return_value = self.filesystem
         self.xml_state = Mock()
+        self.xml_state.profiles = None
         self.xml_state.get_image_version = Mock(
             return_value='1.2.3'
         )
@@ -78,6 +79,11 @@ class TestKisBuilder:
 
     @patch('kiwi.builder.kis.FileSystemBuilder')
     @patch('kiwi.builder.kis.BootImage')
+    def setup_method(self, cls, mock_boot, mock_filesystem):
+        self.setup()
+
+    @patch('kiwi.builder.kis.FileSystemBuilder')
+    @patch('kiwi.builder.kis.BootImage')
     def test_setup_warn_no_initrd_support(self, mock_boot, mock_filesystem):
         boot_image_task = MagicMock()
         boot_image_task.has_initrd_support = Mock(
@@ -98,7 +104,7 @@ class TestKisBuilder:
         mock_tar.return_value = tar
         compress = Mock()
         mock_compress.return_value = compress
-        compress.compressed_filename = 'compressed-file-name'
+        compress.xz.return_value = 'compressed-file-name'
         checksum = Mock()
         mock_checksum.return_value = checksum
         self.boot_image_task.required = Mock(

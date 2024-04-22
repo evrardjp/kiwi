@@ -16,6 +16,7 @@
 # along with kiwi.  If not, see <http://www.gnu.org/licenses/>
 #
 import os
+import json
 import re
 import logging
 from textwrap import dedent
@@ -38,6 +39,8 @@ from kiwi.runtime_config import RuntimeConfig
 from kiwi.exceptions import (
     KiwiRuntimeError
 )
+
+import kiwi.defaults as defaults
 
 dracut_module_type = NamedTuple(
     'dracut_module_type', [
@@ -71,6 +74,32 @@ class RuntimeChecker:
         if not self.xml_state.get_repository_sections():
             raise KiwiRuntimeError(
                 'No repositories configured'
+            )
+
+    def check_include_references_unresolvable(self) -> None:
+        """
+        Raise for still included <include> statements as not resolvable.
+        The KIWI XSLT processing replaces the specified include
+        directive(s) with the given file reference(s). If this action
+        did not happen for example on nested includes, it can happen
+        that they stay in the document as sort of waste.
+        """
+        message = dedent('''\n
+            One ore more <include> statements are unresolvable
+
+            The following include references could not be resolved.
+            Please verify the specified location(s) and/or delete
+            the broken include directive(s) from the description.
+            Please also note, nested includes from other include
+            files are not supported:
+
+            {0}
+        ''')
+        include_files = \
+            self.xml_state.get_include_section_reference_file_names()
+        if include_files:
+            raise KiwiRuntimeError(
+                message.format(json.dumps(include_files, indent=4))
             )
 
     def check_image_include_repos_publicly_resolvable(self) -> None:
@@ -159,6 +188,47 @@ class RuntimeChecker:
                     raise KiwiRuntimeError(
                         message.format(volume_management)
                     )
+
+    def check_partuuid_persistency_type_used_with_mbr(self) -> None:
+        """
+        The devicepersistency setting by-partuuid can only be
+        used in combination with a partition table type that
+        supports UUIDs. In any other case Linux creates artificial
+        values for PTUUID and PARTUUID from the disk signature
+        which can change without touching the actual partition
+        table. We consider this unsafe and only allow the use
+        of by-partuuid in combination with partition tables that
+        actually supports it properly.
+        """
+        message = dedent('''\n
+            devicepersistency={0!r} used with non UUID capable partition table
+
+            PTUUID and PARTUUID exists in the GUID (GPT) partition table.
+            According to the firmware setting: {1!r}, the selected partition
+            table type is: {2!r}. This table type does not natively support
+            UUIDs. In such a case Linux creates artificial values for PTUUID
+            and PARTUUID from the disk signature which can change without
+            touching the actual partition table. This is considered unsafe
+            and KIWI only allows the use of by-partuuid in combination with
+            partition tables that actually supports UUIDs properly.
+
+            Please make sure to use one of the following firmware settings
+            which leads to an image using an UUID capable partition table
+            and therefore supporting consistent by-partuuid device names:
+
+            <type ... firmware="efi|uefi">
+        ''')
+        persistency_type = self.xml_state.build_type.get_devicepersistency()
+        if persistency_type and persistency_type == 'by-partuuid':
+            supported_table_types = ['gpt']
+            firmware = FirmWare(self.xml_state)
+            table_type = firmware.get_partition_table_type()
+            if table_type not in supported_table_types:
+                raise KiwiRuntimeError(
+                    message.format(
+                        persistency_type, firmware.firmware, table_type
+                    )
+                )
 
     def check_swap_name_used_with_lvm(self) -> None:
         """
@@ -325,12 +395,36 @@ class RuntimeChecker:
             --help').\n
             It is known to be present since v0.1.30
         ''')
-        if 'additional_tags' in self.xml_state.get_container_config():
+        if 'additional_names' in self.xml_state.get_container_config():
             if not CommandCapabilities.has_option_in_help(
                 'skopeo', '--additional-tag', ['copy', '--help'],
                 raise_on_error=False
             ):
                 raise KiwiRuntimeError(message)
+
+    def check_luksformat_options_valid(self) -> None:
+        """
+        Options set via the luksformat element are passed along
+        to the cryptsetup tool. Only options that are known to
+        the tool should be allowed. Thus this runtime check looks
+        up the provided option names if they exist in the cryptsetup
+        version used on the build host
+        """
+        message = dedent('''\n
+            Option {0!r} not found in cryptsetup
+
+            The Option {0!r} could not be found in the help output
+            of the cryptsetup tool.
+        ''')
+        luksformat = self.xml_state.build_type.get_luksformat()
+        if luksformat:
+            for option in luksformat[0].get_option():
+                argument = option.get_name()
+                if not CommandCapabilities.has_option_in_help(
+                    'cryptsetup', argument, ['--help'],
+                    raise_on_error=False
+                ):
+                    raise KiwiRuntimeError(message.format(argument))
 
     def check_appx_naming_conventions_valid(self) -> None:
         """
@@ -794,8 +888,10 @@ class RuntimeChecker:
 
             <package name="{0}"/>
         ''')
+        initrd_system = self.xml_state.get_initrd_system()
         required_dracut_package = 'dracut-kiwi-overlay'
-        if self.xml_state.build_type.get_overlayroot():
+        if initrd_system == 'dracut' and \
+           self.xml_state.build_type.get_overlayroot():
             package_names = \
                 self.xml_state.get_bootstrap_packages() + \
                 self.xml_state.get_system_packages()
@@ -947,6 +1043,26 @@ class RuntimeChecker:
                         type_export.getvalue()
                     )
                 )
+
+    def check_efi_fat_image_has_correct_size(self) -> None:
+        """
+        Verify that the efifatimagesize does not exceed the max
+        El Torito load size of 65535 * 512 bytes
+        """
+        message = dedent('''\n
+            El Torito max load size exceeded
+
+            The configured efifatimagesize of '{0}MB' exceeds
+            the El Torito max load size of 65535 * 512 bytes (~31MB).
+        ''')
+        fat_image_mbsize = int(
+            self.xml_state.build_type
+                .get_efifatimagesize() or defaults.EFI_FAT_IMAGE_SIZE
+        )
+        if fat_image_mbsize > 31:
+            raise KiwiRuntimeError(
+                message.format(fat_image_mbsize)
+            )
 
     @staticmethod
     def _get_dracut_module_version_from_pdb(

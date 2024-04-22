@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 
-<image schemaversion="7.4" name="initrd-isoboot-suse-13.2">
+<image schemaversion="7.6" name="initrd-isoboot-suse-13.2">
     <description type="boot">
         <author>Marcus Schaefer</author>
         <contact>ms@novell.com</contact>
@@ -104,7 +104,6 @@
         <package name="bind-libs"/>
         <package name="bind-utils"/>
         <package name="checkmedia"/>
-        <package name="cdrkit-cdrtools-compat"/>
         <package name="cryptsetup"/>
         <package name="nfs-client"/>
         <package name="dialog"/>
@@ -112,7 +111,6 @@
         <package name="filesystem"/>
         <package name="fribidi"/>
         <package name="gawk"/>
-        <package name="genisoimage"/>
         <package name="gfxboot"/>
         <package name="glibc"/>
         <package name="glibc-locale"/>

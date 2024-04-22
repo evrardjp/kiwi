@@ -1,3 +1,4 @@
+import sys
 from mock import (
     patch, call
 )
@@ -5,12 +6,18 @@ from pytest import raises
 
 from kiwi.logger import Logger
 
-from kiwi.exceptions import KiwiLogFileSetupFailed
+from kiwi.exceptions import (
+    KiwiLogFileSetupFailed,
+    KiwiLogSocketSetupFailed
+)
 
 
 class TestLogger:
     def setup(self):
         self.log = Logger('kiwi')
+
+    def setup_method(self, cls):
+        self.setup()
 
     @patch('sys.stdout')
     def test_progress(self, mock_stdout):
@@ -30,6 +37,21 @@ class TestLogger:
             filename='logfile', encoding='utf-8'
         )
         assert self.log.get_logfile() == 'logfile'
+
+    @patch('kiwi.logger.PlainTextSocketHandler')
+    def test_set_log_socket(self, mock_socket_handler):
+        self.log.set_log_socket('socketfile')
+        mock_socket_handler.assert_called_once_with(
+            'socketfile', None
+        )
+
+    @patch('logging.StreamHandler')
+    def test_set_logfile_to_stdout(self, mock_stream_handler):
+        self.log.set_logfile('stdout')
+        mock_stream_handler.assert_called_once_with(
+            sys.__stdout__
+        )
+        assert self.log.get_logfile() is None
 
     @patch('kiwi.logger.ColorFormatter')
     def test_set_color_format(self, mock_color_format):
@@ -55,6 +77,17 @@ class TestLogger:
         with raises(KiwiLogFileSetupFailed):
             self.log.set_logfile('logfile')
 
+    @patch('kiwi.logger.PlainTextSocketHandler')
+    def test_set_log_socket_raise(self, mock_socket_handler):
+        mock_socket_handler.side_effect = KiwiLogSocketSetupFailed
+        with raises(KiwiLogSocketSetupFailed):
+            self.log.set_log_socket('socketfile')
+
     def test_getLogLevel(self):
         self.log.setLogLevel(42)
         assert self.log.getLogLevel() == 42
+
+    def test_getLogFlags(self):
+        assert self.log.getLogFlags().get('run-scripts-in-screen') is None
+        self.log.setLogFlag('run-scripts-in-screen')
+        assert self.log.getLogFlags().get('run-scripts-in-screen') is True

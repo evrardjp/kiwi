@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 
-<image schemaversion="7.4" name="kiwi-test-image-disk-simple">
+<image schemaversion="7.5" name="kiwi-test-image-disk-simple">
     <description type="system">
         <author>Marcus Schäfer</author>
         <contact>ms@suse.com</contact>
@@ -39,5 +39,6 @@
     <packages type="bootstrap">
         <package name="filesystem"/>
         <package name="basesystem"/>
+        <package name="fedora-release"/>
     </packages>
 </image>

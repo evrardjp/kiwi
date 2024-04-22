@@ -15,7 +15,9 @@
 # You should have received a copy of the GNU General Public License
 # along with kiwi.  If not, see <http://www.gnu.org/licenses/>
 #
-from typing import List
+from typing import (
+    List, Dict
+)
 
 from kiwi.api_helper import decommissioned
 from kiwi.command import command_call_type
@@ -34,7 +36,8 @@ class PackageManagerBase:
     :param list product_requests: list of products to install
     """
     def __init__(
-        self, repository: RepositoryBase, custom_args: List = []
+        self, repository: RepositoryBase, custom_args: List = [],
+        release_version: str = ''
     ) -> None:
         self.repository = repository
         self.root_dir = repository.root_dir
@@ -42,6 +45,7 @@ class PackageManagerBase:
         self.collection_requests: List[str] = []
         self.product_requests: List[str] = []
         self.exclude_requests: List[str] = []
+        self.release_version = release_version or '0'
 
         self.post_init(custom_args or [])
 
@@ -99,8 +103,20 @@ class PackageManagerBase:
         """
         raise NotImplementedError
 
+    def setup_repository_modules(
+        self, collection_modules: Dict[str, List[str]]
+    ) -> None:
+        """
+        Setup repository modules and streams
+
+        Implementation in specialized package manager class
+
+        :param dict collection_modules: unused
+        """
+        raise NotImplementedError
+
     def process_install_requests_bootstrap(
-        self, root_bind: RootBind = None
+        self, root_bind: RootBind = None, bootstrap_package: str = None
     ) -> command_call_type:
         """
         Process package install requests for bootstrap phase (no chroot)
@@ -194,10 +210,20 @@ class PackageManagerBase:
         pass  # pragma: no cover
 
     def post_process_install_requests_bootstrap(
-        self, root_bind: RootBind = None
+        self, root_bind: RootBind = None, delta_root: bool = False
     ) -> None:
         """
         Process extra code required after bootstrapping
+
+        Implementation in specialized package manager class
+        """
+        pass
+
+    def post_process_delete_requests(
+        self, root_bind: RootBind = None
+    ) -> None:
+        """
+        Process extra code required after deleting packages
 
         Implementation in specialized package manager class
         """
@@ -218,6 +244,20 @@ class PackageManagerBase:
         :rtype: boolean
         """
         return True if returncode != 0 else False
+
+    def get_error_details(self) -> str:
+        """
+        Provide further error details
+
+        In case the package manager call failed this
+        method will return package manager specific error
+        information if there is any
+
+        :return: further error data as str or empty str
+
+        :rtype: str
+        """
+        return ''
 
     def clean_leftovers(self) -> None:
         """

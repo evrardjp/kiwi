@@ -30,13 +30,15 @@ mypy
 types-pkg_resources
 types-requests
 types-PyYAML
+types-mock
+types-simplejson
 
 # Generate Data Structures from XML Schema
 # http://pythonhosted.org/generateDS
 generateDS==2.29.24
 
 # for building documentation
-sphinx>=4.0.2
+sphinx==5.0.0
 
 git+https://github.com/openSUSE/rstxml2docbook.git@feature/kiwi
 
@@ -55,5 +57,4 @@ python-dateutil
 twine
 
 # for scripts testing
-pytest-testinfra
-dataclasses ; python_version < "3.7"
+pytest-container

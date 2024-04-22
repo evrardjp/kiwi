@@ -15,6 +15,7 @@
 # You should have received a copy of the GNU General Public License
 # along with kiwi.  If not, see <http://www.gnu.org/licenses/>
 #
+import os
 from typing import (
     List, Optional, Any, Dict, NamedTuple
 )
@@ -27,6 +28,7 @@ from textwrap import dedent
 import kiwi.defaults as defaults
 
 from kiwi import xml_parse
+from kiwi.storage.disk import ptable_entry_type
 from kiwi.system.uri import Uri
 from kiwi.defaults import Defaults
 from kiwi.utils.size import StringToSize
@@ -34,7 +36,8 @@ from kiwi.utils.size import StringToSize
 from kiwi.exceptions import (
     KiwiProfileNotFound,
     KiwiTypeNotFound,
-    KiwiDistributionNameError
+    KiwiDistributionNameError,
+    KiwiFileAccessError
 )
 
 log = logging.getLogger('kiwi')
@@ -64,6 +67,7 @@ size_type = NamedTuple(
 volume_type = NamedTuple(
     'volume_type', [
         ('name', str),
+        ('parent', str),
         ('size', str),
         ('realpath', str),
         ('mountpoint', Optional[str]),
@@ -95,6 +99,7 @@ class XMLState:
         self.build_type = self._build_type_section(
             build_type
         )
+        self.resolve_this_path()
 
     def get_preferences_sections(self) -> List:
         """
@@ -140,6 +145,19 @@ class XMLState:
             self.xml_data.get_users()
         )
 
+    def get_build_type_bundle_format(self) -> str:
+        """
+        Return bundle_format for build type
+
+        The bundle_format string is validated against the available
+        name tags from kiwi.system.result::result_name_tags.
+
+        :return: bundle format string
+
+        :rtype: str
+        """
+        return self.build_type.get_bundle_format()
+
     def get_build_type_name(self) -> str:
         """
         Default build type name
@@ -149,6 +167,18 @@ class XMLState:
         :rtype: str
         """
         return self.build_type.get_image()
+
+    def btrfs_default_volume_requested(self) -> bool:
+        """
+        Check if setting a default volume for btrfs is requested
+        """
+        if self.build_type.get_btrfs_set_default_volume() is False:
+            # Setting a default volume is explicitly switched off
+            return False
+        else:
+            # In any other case (True | None) a default volume
+            # is wanted and will be set
+            return True
 
     def get_image_version(self) -> str:
         """
@@ -292,6 +322,22 @@ class XMLState:
             if package_manager:
                 return package_manager[0]
         return Defaults.get_default_package_manager()
+
+    def get_release_version(self) -> str:
+        """
+        Get configured release version from selected preferences section
+
+        :return: Content of the <release-version> section or ''
+
+        :rtype: str
+        """
+        release_version = ''
+        for preferences in self.get_preferences_sections():
+            release_version = preferences.get_release_version()
+            if release_version:
+                release_version = release_version[0]
+                break
+        return release_version
 
     def get_packages_sections(self, section_types: List) -> List:
         """
@@ -465,7 +511,12 @@ class XMLState:
             for package in package_list:
                 result.append(package.package_section.get_name().strip())
             if self.get_system_packages():
-                result.append(self.get_package_manager())
+                package_manager_name = self.get_package_manager()
+                if package_manager_name == 'dnf4':
+                    # The package name for dnf4 is just dnf. Thus
+                    # the name must be adapted in this case
+                    package_manager_name = 'dnf'
+                result.append(package_manager_name)
         if plus_packages:
             result += plus_packages
         return sorted(list(set(result)))
@@ -546,6 +597,24 @@ class XMLState:
                     result.append(package.get_name().strip())
         return sorted(result)
 
+    def get_bootstrap_package_name(self) -> str:
+        """
+        bootstrap_package name from type="bootstrap" packages section
+
+        :return: bootstrap_package name
+
+        :rtype: str
+        """
+        typed_packages_sections = self.get_packages_sections(
+            ['bootstrap', self.get_build_type_name()]
+        )
+        bootstrap_package = ''
+        for packages in typed_packages_sections:
+            bootstrap_package = packages.get_bootstrap_package()
+            if bootstrap_package:
+                break
+        return bootstrap_package
+
     def get_collection_type(self, section_type: str = 'image') -> str:
         """
         Collection type from packages sections matching given section
@@ -590,6 +659,43 @@ class XMLState:
         :rtype: str
         """
         return self.get_collection_type('image')
+
+    def get_collection_modules(self) -> Dict[str, List[str]]:
+        """
+        Dict of collection modules to enable and/or disable
+
+        :return:
+            Dict of the form:
+
+            .. code:: python
+
+                {
+                    'enable': [
+                        "module:stream", "module"
+                    ],
+                    'disable': [
+                        "module"
+                    ]
+                }
+
+        :rtype: dict
+        """
+        modules: Dict[str, List[str]] = {
+            'disable': [],
+            'enable': []
+        }
+        for packages in self.get_bootstrap_packages_sections():
+            for collection_module in packages.get_collectionModule():
+                module_name = collection_module.get_name()
+                if collection_module.get_enable() is False:
+                    modules['disable'].append(module_name)
+                else:
+                    stream = collection_module.get_stream()
+                    if stream:
+                        modules['enable'].append(f'{module_name}:{stream}')
+                    else:
+                        modules['enable'].append(module_name)
+        return modules
 
     def get_collections(self, section_type: str = 'image') -> List:
         """
@@ -713,6 +819,19 @@ class XMLState:
             # the image provides a machine section with a guest loader setup
             return True
         return False
+
+    def get_build_type_partitions_section(self) -> Any:
+        """
+        First partitions section from the build type section
+
+        :return: <partitions> section reference
+
+        :rtype: xml_parse::partitions
+        """
+        partitions_sections = self.build_type.get_partitions()
+        if partitions_sections:
+            return partitions_sections[0]
+        return None
 
     def get_build_type_system_disk_section(self) -> Any:
         """
@@ -857,18 +976,28 @@ class XMLState:
         return bootloader.get_name() if bootloader else \
             Defaults.get_default_bootloader()
 
-    def get_build_type_bootloader_console(self) -> Optional[str]:
+    def get_build_type_bootloader_console(self) -> List[str]:
         """
         Return bootloader console setting for selected build type
 
-        :return: console string
+        :return:
+            list of console settings for output (first element)
+            and input (second element)
 
-        :rtype: str
+        :rtype: list
         """
+        result = ['', '']
         bootloader = self.get_build_type_bootloader_section()
         if bootloader:
-            return bootloader.get_console()
-        return None
+            combined_console = bootloader.get_console()
+            if combined_console:
+                console_out, *console_in = combined_console.split(' ')[:2]
+                console_in = console_out if not console_in else console_in[0]
+                result = [
+                    console_out if console_out != 'none' else '',
+                    console_in if console_in != 'none' else ''
+                ]
+        return result
 
     def get_build_type_bootloader_serial_line_setup(self) -> Optional[str]:
         """
@@ -925,6 +1054,75 @@ class XMLState:
             return bootloader.get_targettype()
         return None
 
+    def get_build_type_bootloader_settings_section(self) -> Any:
+        """
+        First bootloadersettings section from the build
+        type bootloader section
+
+        :return: <bootloadersettings> section reference
+
+        :rtype: xml_parse::bootloadersettings
+        """
+        bootloader_section = self.get_build_type_bootloader_section()
+        bootloader_settings_section = None
+        if bootloader_section:
+            bootloader_settings_section = \
+                bootloader_section.get_bootloadersettings()
+        return bootloader_settings_section
+
+    def get_bootloader_options(self, option_type: str) -> List[str]:
+        """
+        List of custom options used in the process to
+        run bootloader setup workloads
+        """
+        result: List[str] = []
+        bootloader_settings = self.get_build_type_bootloader_settings_section()
+        if bootloader_settings:
+            options = []
+            if option_type == 'shim':
+                options = bootloader_settings.get_shimoption()
+            elif option_type == 'install':
+                options = bootloader_settings.get_installoption()
+            elif option_type == 'config':
+                options = bootloader_settings.get_configoption()
+            for option in options:
+                result.append(option.get_name())
+                if option.get_value():
+                    result.append(option.get_value())
+        return result
+
+    def get_bootloader_shim_options(self) -> List[str]:
+        """
+        List of custom options used in the process to setup secure boot
+        """
+        return self.get_bootloader_options('shim')
+
+    def get_bootloader_install_options(self) -> List[str]:
+        """
+        List of custom options used in the bootloader installation
+        """
+        return self.get_bootloader_options('install')
+
+    def get_bootloader_config_options(self) -> List[str]:
+        """
+        List of custom options used in the bootloader configuration
+        """
+        return self.get_bootloader_options('config')
+
+    def get_build_type_bootloader_use_disk_password(self) -> bool:
+        """
+        Indicate whether the bootloader configuration should use the
+        password protecting the encrypted root volume.
+
+        :return: True|False
+
+        :rtype: bool
+        """
+        bootloader = self.get_build_type_bootloader_section()
+        if bootloader:
+            return bootloader.get_use_disk_password()
+        return False
+
     def get_build_type_oemconfig_section(self) -> Any:
         """
         First oemconfig section from the build type section
@@ -952,6 +1150,20 @@ class XMLState:
             return oemconfig.get_oem_resize()[0]
         else:
             return True
+
+    def get_oemconfig_oem_systemsize(self) -> int:
+        """
+        State value to retrieve root partition size
+
+        :return: Content of <oem-systemsize> section value
+
+        :rtype: int
+        """
+        oemconfig = self.get_build_type_oemconfig_section()
+        if oemconfig and oemconfig.get_oem_systemsize():
+            return int(oemconfig.get_oem_systemsize()[0])
+        else:
+            return 0
 
     def get_oemconfig_oem_multipath_scan(self) -> bool:
         """
@@ -1183,13 +1395,14 @@ class XMLState:
 
         return users_list
 
-    def get_user_groups(self, user_name) -> List:
+    def get_user_groups(self, user_name) -> List[str]:
         """
         List of group names matching specified user
 
-        Each entry in the list is the name of a group that the specified
-        user belongs to. The first item in the list is the login or primary
-        group. The list will be empty if no groups are specified in the
+        Each entry in the list is the name of a group and optionally its
+        group ID separated by a colon, that the specified user belongs to.
+        The first item in the list is the login or primary group. The
+        list will be empty if no groups are specified in the
         description file.
 
         :return: groups data for the given user
@@ -1319,6 +1532,49 @@ class XMLState:
 
         container_config_section.set_labels(labels)
 
+    def get_partitions(self) -> Dict[str, ptable_entry_type]:
+        """
+        Dictionary of configured partitions.
+
+        Each entry in the dict references a ptable_entry_type
+        Each key in the dict references the name of the
+        partition entry as handled by KIWI
+
+        :return:
+            Contains dict of ptable_entry_type tuples
+
+            .. code:: python
+
+                {
+                    'NAME': ptable_entry_type(
+                        mbsize=int,
+                        clone=int,
+                        partition_name=str,
+                        partition_type=str,
+                        mountpoint=str,
+                        filesystem=str
+                    )
+                }
+
+        :rtype: dict
+        """
+        partitions: Dict[str, ptable_entry_type] = {}
+        partitions_section = self.get_build_type_partitions_section()
+        if not partitions_section:
+            return partitions
+        for partition in partitions_section.get_partition():
+            name = partition.get_name()
+            partition_name = partition.get_partition_name() or f'p.lx{name}'
+            partitions[name] = ptable_entry_type(
+                mbsize=self._to_mega_byte(partition.get_size()),
+                clone=int(partition.get_clone()) if partition.get_clone() else 0,
+                partition_name=partition_name,
+                partition_type=partition.get_partition_type() or 't.linux',
+                mountpoint=partition.get_mountpoint(),
+                filesystem=partition.get_filesystem()
+            )
+        return partitions
+
     def get_volumes(self) -> List[volume_type]:
         """
         List of configured systemdisk volumes.
@@ -1341,6 +1597,7 @@ class XMLState:
                 [
                     volume_type(
                         name=volume_name,
+                        parent=volume_parent,
                         size=volume_size,
                         realpath=path,
                         mountpoint=path,
@@ -1367,6 +1624,7 @@ class XMLState:
                 # volume setup for a full qualified volume with name and
                 # mountpoint information. See below for exceptions
                 name = volume.get_name()
+                parent = volume.get_parent() or ''
                 mountpoint = volume.get_mountpoint()
                 realpath = mountpoint
                 size = volume.get_size()
@@ -1434,6 +1692,7 @@ class XMLState:
                 volume_type_list.append(
                     volume_type(
                         name=name,
+                        parent=parent,
                         size=size,
                         fullsize=fullsize,
                         mountpoint=mountpoint,
@@ -1447,6 +1706,9 @@ class XMLState:
         if not have_root_volume_setup:
             # There must always be a root volume setup. It will be the
             # full size volume if no other volume has this setup
+            volume_management = self.get_volume_management()
+            root_volume_name = \
+                defaults.ROOT_VOLUME_NAME if volume_management == 'lvm' else ''
             if have_full_size_volume:
                 size = 'freespace:' + format(
                     Defaults.get_min_volume_mbytes()
@@ -1457,7 +1719,8 @@ class XMLState:
                 fullsize = True
             volume_type_list.append(
                 volume_type(
-                    name=defaults.ROOT_VOLUME_NAME,
+                    name=root_volume_name,
+                    parent='',
                     size=size,
                     fullsize=fullsize,
                     mountpoint=None,
@@ -1472,6 +1735,7 @@ class XMLState:
             volume_type_list.append(
                 volume_type(
                     name=swap_name,
+                    parent='',
                     size='size:{0}'.format(swap_mbytes),
                     fullsize=False,
                     mountpoint=None,
@@ -1580,6 +1844,19 @@ class XMLState:
         """
         return self.get_strip_list('libs')
 
+    def get_include_section_reference_file_names(self) -> List[str]:
+        """
+        List of all <include> section file name references
+
+        :return: List[str]
+
+        :rtype: list
+        """
+        include_files = []
+        for include in self.xml_data.get_include():
+            include_files.append(include.get_from())
+        return include_files
+
     def get_repository_sections(self) -> List:
         """
         List of all repository sections matching configured profiles
@@ -1640,10 +1917,35 @@ class XMLState:
             ]
         )
 
+    def get_repositories_signing_keys(self) -> List[str]:
+        """
+        Get list of signing keys specified on the repositories
+        """
+        key_file_list: List[str] = []
+        release_version = self.get_release_version()
+        release_vars = [
+            '$releasever',
+            '${releasever}'
+        ]
+        for repository in self.get_repository_sections() or []:
+            for signing in repository.get_source().get_signing() or []:
+                normalized_key_url = Uri(signing.get_key()).translate()
+                if release_version:
+                    for release_var in release_vars:
+                        if release_var in normalized_key_url:
+                            normalized_key_url = normalized_key_url.replace(
+                                release_var, release_version
+                            )
+                if normalized_key_url not in key_file_list:
+                    key_file_list.append(normalized_key_url)
+        return key_file_list
+
     def set_repository(
         self, repo_source: str, repo_type: str, repo_alias: str,
         repo_prio: str, repo_imageinclude: bool = False,
-        repo_package_gpgcheck: Optional[bool] = None
+        repo_package_gpgcheck: Optional[bool] = None,
+        repo_signing_keys: List[str] = [], components: str = None,
+        distribution: str = None, repo_gpgcheck: Optional[bool] = None
     ) -> None:
         """
         Overwrite repository data of the first repository
@@ -1654,6 +1956,10 @@ class XMLState:
         :param str repo_prio: priority number, package manager specific
         :param bool repo_imageinclude: setup repository inside of the image
         :param bool repo_package_gpgcheck: enable/disable package gpg checks
+        :param list repo_signing_keys: list of signing key file names
+        :param str components: component names for debian repos
+        :param str distribution: base distribution name for debian repos
+        :param bool repo_gpgcheck: enable/disable repo gpg checks
         """
         repository_sections = self.get_repository_sections()
         if repository_sections:
@@ -1670,11 +1976,23 @@ class XMLState:
                 repository.set_imageinclude(repo_imageinclude)
             if repo_package_gpgcheck is not None:
                 repository.set_package_gpgcheck(repo_package_gpgcheck)
+            if repo_signing_keys:
+                repository.get_source().set_signing(
+                    [xml_parse.signing(key=k) for k in repo_signing_keys]
+                )
+            if components:
+                repository.set_components(components)
+            if distribution:
+                repository.set_distribution(distribution)
+            if repo_gpgcheck is not None:
+                repository.set_repository_gpgcheck(repo_gpgcheck)
 
     def add_repository(
         self, repo_source: str, repo_type: str, repo_alias: str = None,
         repo_prio: str = '', repo_imageinclude: bool = False,
-        repo_package_gpgcheck: Optional[bool] = None
+        repo_package_gpgcheck: Optional[bool] = None,
+        repo_signing_keys: List[str] = [], components: str = None,
+        distribution: str = None, repo_gpgcheck: Optional[bool] = None
     ) -> None:
         """
         Add a new repository section at the end of the list
@@ -1685,6 +2003,10 @@ class XMLState:
         :param str repo_prio: priority number, package manager specific
         :param bool repo_imageinclude: setup repository inside of the image
         :param bool repo_package_gpgcheck: enable/disable package gpg checks
+        :param list repo_signing_keys: list of signing key file names
+        :param str components: component names for debian repos
+        :param str distribution: base distribution name for debian repos
+        :param bool repo_gpgcheck: enable/disable repo gpg checks
         """
         priority_number: Optional[int] = None
         try:
@@ -1697,11 +2019,40 @@ class XMLState:
                 type_=repo_type,
                 alias=repo_alias,
                 priority=priority_number,
-                source=xml_parse.source(path=repo_source),
+                source=xml_parse.source(
+                    path=repo_source,
+                    signing=[
+                        xml_parse.signing(key=k) for k in repo_signing_keys
+                    ]
+                ),
                 imageinclude=repo_imageinclude,
-                package_gpgcheck=repo_package_gpgcheck
+                package_gpgcheck=repo_package_gpgcheck,
+                repository_gpgcheck=repo_gpgcheck,
+                components=components,
+                distribution=distribution
             )
         )
+
+    def resolve_this_path(self) -> None:
+        """
+        Resolve any this:// repo source path into the path
+        representing the target inside of the image description
+        directory
+        """
+        for repository in self.get_repository_sections() or []:
+            repo_source = repository.get_source()
+            repo_path = repo_source.get_path()
+            if repo_path.startswith('this://'):
+                repo_path = repo_path.replace('this://', '')
+                repo_source.set_path(
+                    'dir://{0}'.format(
+                        os.path.realpath(
+                            os.path.join(
+                                self.xml_data.description_dir, repo_path
+                            )
+                        )
+                    )
+                )
 
     def copy_displayname(self, target_state: Any) -> None:
         """
@@ -1867,20 +2218,15 @@ class XMLState:
 
     def copy_bootincluded_packages(self, target_state: Any) -> None:
         """
-        Copy packages marked as bootinclude to the packages type=image
-        (or type=bootstrap if no type=image was found) section in the
-        target xml state. The package will also be removed from the
-        packages type=delete section in the target xml state if
-        present there
+        Copy packages marked as bootinclude to the packages
+        type=bootstrap section in the target xml state. The package
+        will also be removed from the packages type=delete section
+        in the target xml state if present there
 
         :param object target_state: XMLState instance
         """
         target_packages_sections = \
-            target_state.get_image_packages_sections()
-        if not target_packages_sections:
-            # no packages type=image section was found, add to bootstrap
-            target_packages_sections = \
-                target_state.get_bootstrap_packages_sections()
+            target_state.get_bootstrap_packages_sections()
         if target_packages_sections:
             target_packages_section = \
                 target_packages_sections[0]
@@ -2044,6 +2390,63 @@ class XMLState:
 
         return option_list
 
+    def get_luks_credentials(self) -> Optional[str]:
+        """
+        Return key or passphrase credentials to open the luks pool
+
+        :return: data
+
+        :rtype: str
+        """
+        data = self.build_type.get_luks()
+        if data:
+            keyfile_name = None
+            try:
+                # try to interpret data as an URI
+                uri = Uri(data)
+                if not uri.is_remote():
+                    keyfile_name = uri.translate()
+            except Exception:
+                # this doesn't look like a valid URI, continue as just data
+                pass
+            if keyfile_name:
+                try:
+                    with open(keyfile_name) as keyfile:
+                        return keyfile.read()
+                except Exception as issue:
+                    raise KiwiFileAccessError(
+                        f'Failed to read from {keyfile_name!r}: {issue}'
+                    )
+        return data
+
+    def get_luks_format_options(self) -> List[str]:
+        """
+        Return list of luks format options
+
+        :return: list of options
+
+        :rtype: list
+        """
+        result = []
+        luksversion = self.build_type.get_luks_version()
+        luksformat = self.build_type.get_luksformat()
+        luks_pbkdf = self.build_type.get_luks_pbkdf()
+        if luksversion:
+            result.append('--type')
+            result.append(luksversion)
+        if luksformat:
+            for option in luksformat[0].get_option():
+                result.append(option.get_name())
+                if option.get_value():
+                    result.append(option.get_value())
+        if luks_pbkdf:
+            # Allow to override the pbkdf algorithm that cryptsetup
+            # uses by default. Cryptsetup may use argon2i by default,
+            # which is not supported by all bootloaders.
+            result.append('--pbkdf')
+            result.append(luks_pbkdf)
+        return result
+
     def get_derived_from_image_uri(self) -> Optional[Uri]:
         """
         Uri object of derived image if configured
@@ -2110,6 +2513,45 @@ class XMLState:
         """
         return self.root_filesystem_uuid
 
+    @staticmethod
+    def get_archives_target_dirs(
+        packages_sections_names: Optional[List[xml_parse.packages]]
+    ) -> Dict:
+        """
+        Dict of archive names and target dirs for packages section(s), if any
+        :return: archive names and its target dir
+        :rtype: dict
+        """
+        result = {}
+        if packages_sections_names:
+            for package_section_name in packages_sections_names:
+                for archive in package_section_name.get_archive():
+                    result[archive.get_name().strip()] = archive.get_target_dir()
+
+        return result
+
+    def get_bootstrap_archives_target_dirs(self) -> Dict:
+        """
+        Dict of archive names and target dirs from the type="bootstrap"
+        packages section(s)
+        :return: archive names and its target dir
+        :rtype: dict
+        """
+        return self.get_archives_target_dirs(
+            self.get_packages_sections(['bootstrap'])
+        )
+
+    def get_system_archives_target_dirs(self) -> Dict:
+        """
+        Dict of archive names and its target dir from the packages sections matching
+        type="image" and type=build_type
+        :return: archive names and its target dir
+        :rtype: dict
+        """
+        return self.get_archives_target_dirs(
+            self.get_packages_sections(['image', self.get_build_type_name()])
+        )
+
     def _used_profiles(self, profiles=None):
         """
         return list of profiles to use. The method looks up the
@@ -2127,14 +2569,14 @@ class XMLState:
         """
         available_profiles = dict()
         import_profiles = []
-        profiles_section = self.xml_data.get_profiles()
-        if profiles_section:
-            for profile in profiles_section[0].get_profile():
+        for profiles_section in self.xml_data.get_profiles():
+            for profile in profiles_section.get_profile():
                 if self.profile_matches_host_architecture(profile):
                     name = profile.get_name()
                     available_profiles[name] = profile
                     if profile.get_import():
                         import_profiles.append(name)
+
         if not profiles:
             return import_profiles
         else:
@@ -2161,15 +2603,15 @@ class XMLState:
             maintainer = container_config_section.get_maintainer()
             user = container_config_section.get_user()
             workingdir = container_config_section.get_workingdir()
-            additional_tags = container_config_section.get_additionaltags()
+            additional_names = container_config_section.get_additionalnames()
             if name:
                 container_base['container_name'] = name
 
             if tag:
                 container_base['container_tag'] = tag
 
-            if additional_tags:
-                container_base['additional_tags'] = additional_tags.split(',')
+            if additional_names:
+                container_base['additional_names'] = additional_names.split(',')
 
             if maintainer:
                 container_base['maintainer'] = maintainer
@@ -2329,8 +2771,8 @@ class XMLState:
                 if build_type == image_type.get_image():
                     return image_type
             raise KiwiTypeNotFound(
-                'build type {0} not found in {1}'.format(
-                    build_type, self.xml_data.description
+                'Build type {0!r} not found for applied profiles: {1!r}'.format(
+                    build_type, self.profiles
                 )
             )
 
@@ -2343,7 +2785,9 @@ class XMLState:
         if image_type_sections:
             return image_type_sections[0]
         raise KiwiTypeNotFound(
-            'No build type defined in {0}'.format(self.xml_data.description)
+            'No build type defined with applied profiles: {0!r}'.format(
+                self.profiles
+            )
         )
 
     def _profiled(self, xml_abstract):
@@ -2372,7 +2816,7 @@ class XMLState:
         return name
 
     def _to_mega_byte(self, size):
-        value = re.search('(\d+)([MG]*)', format(size))
+        value = re.search(r'(\d+)([MG]*)', format(size))
         if value:
             number = value.group(1)
             unit = value.group(2)

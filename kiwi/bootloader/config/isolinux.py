@@ -69,12 +69,12 @@ class BootLoaderConfigIsoLinux(BootLoaderConfigBase):
                     self.xml_state.build_type.get_hybridpersistent_filesystem()
                 )
 
-        self.terminal = self.xml_state.get_build_type_bootloader_console()
+        self.terminal = self.xml_state.get_build_type_bootloader_console()[0]
         self.gfxmode = self.get_gfxmode('isolinux')
         # isolinux counts the timeout in units of 1/10 sec
         self.timeout = self.get_boot_timeout_seconds() * 10
         self.continue_on_timeout = self.get_continue_on_timeout()
-        self.cmdline = self.get_boot_cmdline()
+        self.cmdline = self.get_boot_cmdline(boot_device=None)
         self.cmdline_failsafe = ' '.join(
             [self.cmdline, Defaults.get_failsafe_kernel_options()]
         )

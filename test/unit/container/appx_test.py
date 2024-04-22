@@ -21,6 +21,11 @@ class TestContainerImageAppx:
 
     @patch('kiwi.container.appx.RuntimeConfig')
     @patch('os.path.exists')
+    def setup_method(self, cls, mock_os_path_exists, mock_RuntimeConfig):
+        self.setup()
+
+    @patch('kiwi.container.appx.RuntimeConfig')
+    @patch('os.path.exists')
     def test_init_raises(self, mock_os_path_exists, mock_RuntimeConfig):
         mock_os_path_exists.return_value = True
         with raises(KiwiContainerSetupError):
@@ -37,11 +42,11 @@ class TestContainerImageAppx:
     @patch('kiwi.container.appx.Compress')
     @patch('kiwi.container.appx.Defaults.get_exclude_list_for_root_data_sync')
     @patch('kiwi.container.appx.Defaults.get_exclude_list_from_custom_exclude_files')
-    @patch('kiwi.container.appx.NamedTemporaryFile')
+    @patch('kiwi.container.appx.Temporary.new_file')
     @patch('kiwi.container.appx.Command.run')
     @patch('os.walk')
     def test_create(
-        self, mock_os_walk, mock_Command_run, mock_NamedTemporaryFile,
+        self, mock_os_walk, mock_Command_run, mock_Temporary_new_file,
         mock_get_exclude_list_from_custom_exclude_files,
         mock_get_exclude_list_for_root_data_sync,
         mock_Compress, mock_ArchiveTar
@@ -53,7 +58,7 @@ class TestContainerImageAppx:
         ]
         tempfile = Mock()
         tempfile.name = 'tempfile'
-        mock_NamedTemporaryFile.return_value = tempfile
+        mock_Temporary_new_file.return_value = tempfile
         archive = Mock()
         mock_ArchiveTar.return_value = archive
         compress = Mock()
@@ -61,7 +66,7 @@ class TestContainerImageAppx:
         with patch('builtins.open', create=True) as mock_open:
             mock_open.return_value = MagicMock(spec=io.IOBase)
             file_handle = mock_open.return_value.__enter__.return_value
-            self.appx.create('target_dir/image.appx')
+            self.appx.create('target_dir/image.appx', '', False, True)
             assert file_handle.write.call_args_list == [
                 call('[Files]\n'),
                 call('"source/baz/baz_file" "../../source/baz/baz_file"\n')
@@ -73,10 +78,14 @@ class TestContainerImageAppx:
             return_value + mock_get_exclude_list_from_custom_exclude_files.
             return_value
         )
-        mock_Compress.assert_called_once_with(
-            archive.create.return_value
-        )
+        assert mock_Compress.call_args_list == [
+            call(archive.create.return_value),
+            call('target_dir/image.appx')
+        ]
         compress.gzip.assert_called_once_with()
         mock_Command_run.assert_called_once_with(
             ['appx', '-o', 'target_dir/image.appx', '-f', 'tempfile']
+        )
+        compress.xz.assert_called_once_with(
+            self.appx.runtime_config.get_xz_options.return_value
         )

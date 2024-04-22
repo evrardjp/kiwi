@@ -16,10 +16,17 @@
 # along with kiwi.  If not, see <http://www.gnu.org/licenses/>
 #
 import os
+import re
 import logging
-from urllib.parse import urlparse
+from lxml import etree
+from urllib.parse import (
+    urlparse, ParseResult, quote
+)
+from urllib.request import urlopen
+from urllib.request import Request
 import requests
-import hashlib
+from uuid import uuid4
+from typing import Optional
 
 # project
 from kiwi.defaults import Defaults
@@ -36,20 +43,47 @@ log = logging.getLogger('kiwi')
 
 class Uri:
     """
-    **Normalize url types**
-
-    Allow to translate the available KIWI repo source types
-    into standard mime types
-
-    :param str uri: URI, remote or local repository location
-    :param str repo_type:
-        repository type name, defaults to 'rpm-md' and is only
-        effectively used when building inside of the open
-        build service which maps local repositories to a
-        specific environment
+    **Normalize and manage URI types**
     """
-    def __init__(self, uri: str, repo_type: str = 'rpm-md'):
+    def __init__(
+        self, uri: str, repo_type: str = 'rpm-md', source_type: str = ''
+    ):
+        """
+        Manage kiwi source URIs and allow transformation into
+        standard URLs
+
+        :param str uri: URI, remote, local or metalink repository location
+            The resource type as part of the URI can be set to one of:
+            * http:
+            * https:
+            * ftp:
+            * obs:
+            * dir:
+            * file:
+            * obsrepositories:
+            * this:
+            The special this:// type resolve to the image description
+            directory. The code to resolve this is not part of the Uri
+            class because it has no state information about the image
+            description directory. Therefore the resolving of the this://
+            path happens on construction of an XMLState object as
+            part of the resolve_this_path() method. The method resolves
+            the path into a native dir:// URI which can be properly
+            handled here.
+        :param str repo_type:
+            repository type name, defaults to 'rpm-md' and is only
+            effectively used when building inside of the open
+            build service which maps local repositories to a
+            specific environment
+        :param str source_type:
+            specify source type if the provided URI is a service.
+            Currently only the metalink source type is handled
+        """
         self.runtime_config = RuntimeConfig()
+
+        if source_type == 'metalink':
+            uri = self._resolve_metalink_uri(uri)
+
         self.repo_type = repo_type
         self.uri = uri if not uri.startswith(os.sep) else ''.join(
             [Defaults.get_default_uri_type(), uri]
@@ -119,18 +153,36 @@ class Uri:
         elif uri.scheme == 'file':
             return self._local_path(uri.path)
         elif uri.scheme.startswith('http') or uri.scheme == 'ftp':
+            netloc = uri.netloc
+            uri_with_credentials_pattern = '^(.*):(.*)@(.*)$'
+            sensitive_match = re.match(uri_with_credentials_pattern, netloc)
+            if sensitive_match:
+                netloc = "{0}:{1}@{2}".format(
+                    quote(sensitive_match.group(1)),
+                    quote(sensitive_match.group(2)),
+                    sensitive_match.group(3)
+                )
             if self._get_credentials_uri() or not uri.query:
                 return ''.join(
-                    [uri.scheme, '://', uri.netloc, uri.path]
+                    [uri.scheme, '://', netloc, uri.path]
                 )
             else:
                 return ''.join(
-                    [uri.scheme, '://', uri.netloc, uri.path, '?', uri.query]
+                    [uri.scheme, '://', netloc, uri.path, '?', uri.query]
                 )
         else:
             raise KiwiUriStyleUnknown(
                 'URI schema %s not supported' % self.uri
             )
+
+    @staticmethod
+    def print_sensitive(location: str) -> str:
+        uri_with_credentials_pattern = '^.*://(.*:.*)@.*'
+        sensitive_match = re.match(uri_with_credentials_pattern, location)
+        if sensitive_match:
+            return location.replace(sensitive_match.group(1), '******')
+        else:
+            return location
 
     def credentials_file_name(self) -> str:
         """
@@ -147,24 +199,24 @@ class Uri:
         query = {'credentials': 'kiwiRepoCredentials'}
 
         if uri:
-            query = dict(params.split('=') for params in uri.query.split('&'))
+            query = dict(params.split('=') for params in uri.query.split('&'))  # type: ignore
 
         return query['credentials']
 
     def alias(self) -> str:
         """
-        Create hexdigest from URI as alias
+        Create hex representation of uuid4
 
         If the repository definition from the XML description does
         not provide an alias, kiwi creates one for you. However it's
         better to assign a human readable alias in the XML
         configuration
 
-        :return: alias name as hexdigest
+        :return: alias name as hex representation of uuid4
 
         :rtype: str
         """
-        return hashlib.md5(self.uri.encode()).hexdigest()
+        return uuid4().hex
 
     def is_remote(self) -> bool:
         """
@@ -223,15 +275,17 @@ class Uri:
         uri = urlparse(self.uri)
         return uri.fragment
 
-    def _get_credentials_uri(self):
+    def _get_credentials_uri(self) -> Optional[ParseResult]:
         uri = urlparse(self.uri)
+        credentials_uri = None
         if uri.query and uri.query.startswith('credentials='):
-            return uri
+            credentials_uri = uri
+        return credentials_uri
 
-    def _local_path(self, path):
+    def _local_path(self, path: str) -> str:
         return os.path.abspath(os.path.normpath(path))
 
-    def _obs_project_download_link(self, name):
+    def _obs_project_download_link(self, name: str) -> str:
         name_parts = name.split(os.sep)
         repository = name_parts.pop()
         project = os.sep.join(name_parts)
@@ -258,7 +312,9 @@ class Uri:
                 f'{download_link}: {issue}'
             )
 
-    def _buildservice_path(self, name, urischeme, fragment=None):
+    def _buildservice_path(
+        self, name: str, urischeme: str, fragment: str = ''
+    ) -> str:
         """
         Special to openSUSE buildservice. If the buildservice builds
         the image it arranges the repos for each build in a special
@@ -281,3 +337,34 @@ class Uri:
                 [bs_source_dir, 'repos', name]
             )
         return self._local_path(local_path)
+
+    def _resolve_metalink_uri(self, uri: str) -> str:
+        selected_repo_source = uri
+        namespace_map = dict(
+            metalink="http://www.metalinker.org/"
+        )
+        expression = '//metalink:file[@name="repomd.xml"]/metalink:resources/*'
+        try:
+            metalink_location = urlopen(Request(uri))
+            xml = etree.parse(metalink_location)
+            url_list = xml.getroot().xpath(
+                expression, namespaces=namespace_map
+            )
+            source_dict = {}
+            for url in url_list:
+                if url.get('protocol') == 'https':
+                    source_dict[url.text] = int(url.get('preference'))
+            start_preference = 0
+            for url in sorted(source_dict.keys()):
+                preference = source_dict[url]
+                if preference > start_preference:
+                    selected_repo_source = url
+                    start_preference = preference
+        except Exception as issue:
+            raise KiwiUriOpenError(
+                f'Failed to resolve metalink URI: {issue}'
+            )
+        selected_repo_source = selected_repo_source.replace(
+            'repodata/repomd.xml', ''
+        )
+        return selected_repo_source

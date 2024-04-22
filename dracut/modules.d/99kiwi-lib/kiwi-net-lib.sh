@@ -1,3 +1,5 @@
+#!/bin/bash
+
 type getarg >/dev/null 2>&1 || . /lib/dracut-lib.sh
 
 # URI pattern Based on https://tools.ietf.org/html/rfc3986#appendix-B
@@ -27,7 +29,7 @@ function fetch_file {
     if _is_dolly "${source_url}";then
         fetch="dolly"
     fi
-    if _is_compressed "${source_url}";then
+    if _is_xz_compressed "${source_url}";then
         fetch="${fetch} | xz -d"
     fi
     if [ -z "${source_uncompressed_bytes}" ];then
@@ -78,7 +80,7 @@ function uri_fragment {
 #======================================
 # Methods considered private
 #--------------------------------------
-function _is_compressed {
+function _is_xz_compressed {
     local source_url=$1
     [[ ${source_url} =~ .xz$ ]]
 }

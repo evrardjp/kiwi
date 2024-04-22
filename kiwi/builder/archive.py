@@ -21,6 +21,7 @@ from typing import Dict
 # project
 from kiwi.defaults import Defaults
 from kiwi.archive.tar import ArchiveTar
+from kiwi.archive.cpio import ArchiveCpio
 from kiwi.system.setup import SystemSetup
 from kiwi.system.result import Result
 from kiwi.runtime_config import RuntimeConfig
@@ -51,11 +52,12 @@ class ArchiveBuilder:
         self.target_dir = target_dir
         self.xml_state = xml_state
         self.requested_archive_type = xml_state.get_build_type_name()
+        self.bundle_format = xml_state.get_build_type_bundle_format()
         self.result = Result(xml_state)
         self.system_setup = SystemSetup(
             xml_state=xml_state, root_dir=self.root_dir
         )
-        self.filename = self._target_file_for('tar.xz')
+        self.filename = ''
         self.xz_options = custom_args['xz_options'] if custom_args \
             and 'xz_options' in custom_args else None
 
@@ -70,6 +72,7 @@ class ArchiveBuilder:
         Image types which triggers this builder are:
 
         * image="tbz"
+        * image="cpio"
 
         :return: result
 
@@ -83,19 +86,31 @@ class ArchiveBuilder:
 
         if self.requested_archive_type == 'tbz':
             log.info('Creating XZ compressed tar archive')
-            archive = ArchiveTar(
+            self.filename = self._target_file_for('tar.xz')
+            ArchiveTar(
                 self._target_file_for('tar')
-            )
-            archive.create_xz_compressed(
+            ).create_xz_compressed(
                 self.root_dir, xz_options=self.xz_options,
                 exclude=Defaults.
                 get_exclude_list_for_root_data_sync() + Defaults.
                 get_exclude_list_from_custom_exclude_files(self.root_dir)
             )
+        if self.requested_archive_type == 'cpio':
+            log.info('Creating CPIO archive')
+            self.filename = self._target_file_for('cpio')
+            ArchiveCpio(self.filename).create(
+                self.root_dir,
+                exclude=Defaults.
+                get_exclude_list_for_root_data_sync() + Defaults.
+                get_exclude_list_from_custom_exclude_files(self.root_dir)
+            )
+        if self.filename:
             Result.verify_image_size(
                 self.runtime_config.get_max_size_constraint(),
                 self.filename
             )
+            if self.bundle_format:
+                self.result.add_bundle_format(self.bundle_format)
             self.result.add(
                 key='root_archive',
                 filename=self.filename,

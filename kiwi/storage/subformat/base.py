@@ -137,13 +137,9 @@ class DiskFormatBase:
             ordered_args = OrderedDict(sorted(custom_args.items()))
             for key, value in list(ordered_args.items()):
                 if key == 'adapter_type=pvscsi':
-                    # qemu does not support the pvscsi type:
-                    # To build a vmdk image with ddb.adapterType set to
-                    # pvscsi we need to manually change the header but
-                    # have to create a vmdk with lsilogic as scsi adapter
-                    # first. I don't really like this hack but it seems
-                    # there is no way around. For details see
-                    # bsc#1099569
+                    # Building for the pvscsi ddb.adapterType only
+                    # affects the guest configuration (vmx). For the
+                    # vmdk disk format this is the same as lsilogic
                     key = 'adapter_type=lsilogic'
                 options.append('-o')
                 if value:
@@ -189,15 +185,16 @@ class DiskFormatBase:
 
         :param object result: Instance of Result
         """
+        compression = self.runtime_config.get_bundle_compression(default=True)
+        if self.xml_state.get_luks_credentials() is not None:
+            compression = False
         result.add(
             key='disk_format_image',
             filename=self.get_target_file_path_for_format(
                 self.image_format
             ),
             use_for_bundle=True,
-            compress=self.runtime_config.get_bundle_compression(
-                default=True
-            ),
+            compress=compression,
             shasum=True
         )
 

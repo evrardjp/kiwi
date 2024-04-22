@@ -64,9 +64,10 @@ config = {
     'install_requires': [
         'docopt>=0.6.2',
         'lxml',
-        'pyxattr',
         'requests',
-        'PyYAML'
+        'PyYAML',
+        'simplejson',
+        'typing_extensions; python_version < "3.8"',
     ],
     'packages': ['kiwi'],
     'cmdclass': {

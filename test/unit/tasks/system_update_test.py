@@ -5,11 +5,13 @@ import kiwi
 
 from ..test_helper import argv_kiwi_tests
 
+from kiwi.defaults import Defaults
 from kiwi.tasks.system_update import SystemUpdateTask
 
 
 class TestSystemUpdateTask:
     def setup(self):
+        Defaults.set_platform_name('x86_64')
         sys.argv = [
             sys.argv[0], '--profile', 'vmxFlavour', 'system', 'update',
             '--root', '../data/root-dir'
@@ -28,8 +30,14 @@ class TestSystemUpdateTask:
         )
         self.task = SystemUpdateTask()
 
+    def setup_method(self, cls):
+        self.setup()
+
     def teardown(self):
         sys.argv = argv_kiwi_tests
+
+    def teardown_method(self, cls):
+        self.teardown()
 
     def _init_command_args(self):
         self.task.command_args = {}

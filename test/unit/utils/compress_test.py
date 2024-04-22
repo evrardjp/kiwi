@@ -24,6 +24,10 @@ class TestCompress:
         mock_exists.return_value = True
         self.compress = Compress('some-file', True)
 
+    @patch('os.path.exists')
+    def setup_method(self, cls, mock_exists):
+        self.setup()
+
     def test_source_file_not_found(self):
         with raises(KiwiFileNotFound):
             Compress('some-file')
@@ -59,7 +63,7 @@ class TestCompress:
         assert self.compress.compressed_filename == 'some-file.gz'
 
     @patch('kiwi.command.Command.run')
-    @patch('kiwi.utils.compress.NamedTemporaryFile')
+    @patch('kiwi.utils.compress.Temporary.new_file')
     @patch('kiwi.utils.compress.Compress.get_format')
     def test_uncompress(self, mock_format, mock_temp, mock_command):
         mock_format.return_value = 'xz'
@@ -70,7 +74,7 @@ class TestCompress:
         assert self.compress.uncompressed_filename == 'some-file'
 
     @patch('kiwi.command.Command.run')
-    @patch('kiwi.utils.compress.NamedTemporaryFile')
+    @patch('kiwi.utils.compress.Temporary.new_file')
     @patch('kiwi.utils.compress.Compress.get_format')
     def test_uncompress_temporary(self, mock_format, mock_temp, mock_command):
         tempfile = Mock()

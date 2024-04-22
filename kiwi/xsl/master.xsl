@@ -5,6 +5,7 @@
         exclude-result-prefixes="exslt"
 >
 
+<xsl:import href="include.xsl"/>
 <xsl:import href="convert14to20.xsl"/>
 <xsl:import href="convert20to24.xsl"/>
 <xsl:import href="convert24to35.xsl"/>
@@ -45,14 +46,19 @@
 <xsl:import href="convert71to72.xsl"/>
 <xsl:import href="convert72to73.xsl"/>
 <xsl:import href="convert73to74.xsl"/>
+<xsl:import href="convert74to75.xsl"/>
+<xsl:import href="convert75to76.xsl"/>
 <xsl:import href="pretty.xsl"/>
-
 
 <xsl:output encoding="utf-8"/>
 
 <xsl:template match="/">
+    <xsl:variable name="preprocess">
+        <xsl:apply-templates select="/" mode="include"/>
+    </xsl:variable>
+
     <xsl:variable name="v14">
-        <xsl:apply-templates select="/" mode="conv14to20"/>
+        <xsl:apply-templates select="exslt:node-set($preprocess)" mode="conv14to20"/>
     </xsl:variable>
 
     <xsl:variable name="v20">
@@ -211,8 +217,16 @@
         <xsl:apply-templates select="exslt:node-set($v73)" mode="conv73to74"/>
     </xsl:variable>
 
+    <xsl:variable name="v75">
+        <xsl:apply-templates select="exslt:node-set($v74)" mode="conv74to75"/>
+    </xsl:variable>
+
+    <xsl:variable name="v76">
+        <xsl:apply-templates select="exslt:node-set($v75)" mode="conv75to76"/>
+    </xsl:variable>
+
     <xsl:apply-templates
-        select="exslt:node-set($v74)" mode="pretty"
+        select="exslt:node-set($v76)" mode="pretty"
     />
 </xsl:template>
 

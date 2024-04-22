@@ -13,9 +13,8 @@ from kiwi.exceptions import KiwiCommandError
 
 class TestRepositoryZypper:
     @patch('kiwi.command.Command.run')
-    @patch('kiwi.repository.zypper.NamedTemporaryFile')
+    @patch('kiwi.repository.zypper.Temporary.new_file')
     def setup(self, mock_temp, mock_command):
-
         self.context_manager_mock = mock.Mock()
         self.file_mock = mock.Mock()
         self.enter_mock = mock.Mock()
@@ -36,14 +35,19 @@ class TestRepositoryZypper:
             )
 
     @patch('kiwi.command.Command.run')
-    @patch('kiwi.repository.zypper.NamedTemporaryFile')
+    @patch('kiwi.repository.zypper.Temporary.new_file')
+    def setup_method(self, cls, mock_temp, mock_command):
+        self.setup()
+
+    @patch('kiwi.command.Command.run')
+    @patch('kiwi.repository.zypper.Temporary.new_file')
     def test_custom_args_init_excludedocs(self, mock_temp, mock_command):
         with patch('builtins.open', create=True):
             repo = RepositoryZypper(self.root_bind)
             assert repo.custom_args == []
 
     @patch('kiwi.command.Command.run')
-    @patch('kiwi.repository.zypper.NamedTemporaryFile')
+    @patch('kiwi.repository.zypper.Temporary.new_file')
     @patch('kiwi.repository.zypper.ConfigParser')
     def test_custom_args_init_check_signatures(
         self, mock_config, mock_temp, mock_command
@@ -111,7 +115,10 @@ class TestRepositoryZypper:
         mock_config.return_value = repo_config
         mock_exists.return_value = True
         with patch('builtins.open', create=True) as mock_open:
-            self.repo.add_repo('foo', 'kiwi_iso_mount/uri', 'rpm-md', 42)
+            self.repo.add_repo(
+                'foo', 'kiwi_iso_mount/uri', 'rpm-md', 42,
+                customization_script='custom_script'
+            )
             mock_wipe.assert_called_once_with(
                 '../data/shared-dir/zypper/repos/foo.repo'
             )
@@ -133,6 +140,10 @@ class TestRepositoryZypper:
                         'foo'
                     ], self.repo.command_env
                 ),
+                call([
+                    'bash', '--norc', 'custom_script',
+                    '../data/shared-dir/zypper/repos/foo.repo'
+                ]),
                 call([
                     'mv', '-f',
                     '/shared-dir/packages.moved', '/shared-dir/packages'
@@ -174,6 +185,36 @@ class TestRepositoryZypper:
                     '/shared-dir/packages.moved', '/shared-dir/packages'
                 ])
             ]
+
+    @patch('kiwi.repository.zypper.ConfigParser')
+    @patch('kiwi.command.Command.run')
+    @patch('kiwi.repository.zypper.Path.wipe')
+    @patch('os.path.exists')
+    @patch('kiwi.repository.zypper.Uri')
+    def test_add_repo_with_credentials_in_uri(
+        self, mock_uri, mock_exists, mock_wipe, mock_command, mock_config
+    ):
+        repo_config = mock.Mock()
+        mock_config.return_value = repo_config
+        mock_exists.return_value = True
+        with patch('builtins.open', create=True) as mock_open:
+            self.repo.add_repo(
+                'foo',
+                'https://some_user%40domain.com:my_token123@example.com/foo',
+                'rpm-md'
+            )
+            assert repo_config.set.call_args_list == [
+                call(
+                    'foo',
+                    'baseurl',
+                    'https://some_user%40domain.com:my_token123@example.com/foo'
+                ),
+                call('foo', 'repo_gpgcheck', '0'),
+                call('foo', 'pkg_gpgcheck', '0')
+            ]
+            mock_open.assert_called_once_with(
+                '../data/shared-dir/zypper/repos/foo.repo', 'w'
+            )
 
     @patch('kiwi.repository.zypper.ConfigParser')
     @patch('kiwi.command.Command.run')

@@ -19,14 +19,17 @@ import glob
 import os
 import logging
 import copy
+import pathlib
 from collections import OrderedDict
 from collections import namedtuple
-from tempfile import NamedTemporaryFile
-from typing import Any
+from typing import (
+    Any, List
+)
 
 # project
 import kiwi.defaults as defaults
 
+from kiwi.xml_parse import repository
 from kiwi.utils.fstab import Fstab
 from kiwi.xml_state import XMLState
 from kiwi.runtime_config import RuntimeConfig
@@ -50,7 +53,8 @@ from kiwi.system.profile import Profile
 
 from kiwi.exceptions import (
     KiwiImportDescriptionError,
-    KiwiScriptFailed
+    KiwiScriptFailed,
+    KiwiFileNotFound
 )
 
 log: Any = logging.getLogger('kiwi')
@@ -150,23 +154,36 @@ class SystemSetup:
             repo_components = xml_repo.get_components()
             repo_repository_gpgcheck = xml_repo.get_repository_gpgcheck()
             repo_package_gpgcheck = xml_repo.get_package_gpgcheck()
+            repo_customization_script = self._get_repo_customization_script(
+                xml_repo
+            )
             repo_sourcetype = xml_repo.get_sourcetype()
+            repo_use_for_bootstrap = False
             uri = Uri(repo_source, repo_type)
             repo_source_translated = uri.translate(
                 check_build_environment=False
             )
             if not repo_alias:
                 repo_alias = uri.alias()
-            log.info('Setting up image repository {0}'.format(repo_source))
+            log.info(
+                'Setting up image repository {0}'.format(
+                    Uri.print_sensitive(repo_source)
+                )
+            )
             log.info('--> Type: {0}'.format(repo_type))
-            log.info('--> Translated: {0}'.format(repo_source_translated))
+            log.info(
+                '--> Translated: {0}'.format(
+                    Uri.print_sensitive(repo_source_translated)
+                )
+            )
             log.info('--> Alias: {0}'.format(repo_alias))
             repo.add_repo(
                 repo_alias, repo_source_translated,
                 repo_type, repo_priority, repo_dist, repo_components,
                 repo_user, repo_secret, uri.credentials_file_name(),
                 repo_repository_gpgcheck, repo_package_gpgcheck,
-                repo_sourcetype
+                repo_sourcetype, repo_use_for_bootstrap,
+                repo_customization_script
             )
 
     def import_cdroot_files(self, target_dir: str) -> None:
@@ -236,26 +253,30 @@ class SystemSetup:
         """
         Setup systemd machine id
 
-        Empty out the machine id which was provided by the package
-        installation process. This will instruct the dracut initrd
-        code to create a new machine id. This way a golden image
-        produces unique machine id's on first deployment and boot
-        of the image.
+        There are various states of /etc/machine-id:
 
-        Note: Requires dracut connected image type
+        a) Does not exist: Triggers ConditionFirstBoot, but does not work
+           if the filesystem is initially read-only (booted without "rw").
+        b) Exists, is empty: Does not trigger ConditionFirstBoot, but works
+           with read-only mounts.
+        c) Exists, contains the string "uninitialized": Same as b), but
+           triggers ConditionFirstBoot. Supported by systemd v247+ only.
+        d) Exists, contains a valid ID.
 
-        This method must only be called if the image is of
-        a type which gets booted via a dracut created initrd.
-        Deleting the machine-id without the dracut initrd
-        creating a new one produces an inconsistent system
+        See the machine-id(5) man page for details.
+
+        In images, d) is not desirable, so truncate the file. This is the
+        previous behaviour and what existing images expect. If the image
+        has one of the other states, keep it as-is.
         """
         machine_id = os.path.join(
             self.root_dir, 'etc', 'machine-id'
         )
 
         if os.path.exists(machine_id):
-            with open(machine_id, 'w'):
-                pass
+            with open(machine_id, 'r+') as f:
+                if 'uninitialized' not in f.read():
+                    f.truncate(0)
 
     def setup_permissions(self) -> None:
         """
@@ -371,10 +392,14 @@ class SystemSetup:
         system_users = Users(self.root_dir)
 
         for user in self.xml_state.get_users():
-            for group in self.xml_state.get_user_groups(user.get_name()):
+            group_dict = self._get_group_names_and_ids_for_user(user.get_name())
+            for group, group_id in group_dict.items():
                 if not system_users.group_exists(group):
                     log.info('Adding group {0}'.format(group))
-                    system_users.group_add(group, [])
+                    options = self._process_user_options(
+                        group_id=group_id
+                    )
+                    system_users.group_add(group, options)
 
     def setup_users(self) -> None:
         """
@@ -391,13 +416,21 @@ class SystemSetup:
             user_id = user.get_id()
             user_realname = user.get_realname()
             user_shell = user.get_shell()
-            user_groups = self.xml_state.get_user_groups(user.get_name())
+            user_groups = list(
+                self._get_group_names_and_ids_for_user(user.get_name()).keys()
+            )
 
             user_exists = system_users.user_exists(user_name)
 
             options = self._process_user_options(
-                password_format, password, user_shell, user_groups,
-                user_id, user_realname, user_exists, home_path
+                password_format=password_format,
+                password=password,
+                user_shell=user_shell,
+                user_groups=user_groups,
+                user_id=user_id,
+                user_realname=user_realname,
+                user_exists=user_exists,
+                home_path=home_path
             )
 
             group_msg = '--> Primary group for user {0}: {1}'.format(
@@ -467,12 +500,61 @@ class SystemSetup:
         :param str security_context_file: path file name
         """
         log.info('Processing SELinux file security contexts')
-        Command.run(
-            [
-                'chroot', self.root_dir,
-                'setfiles', security_context_file, '/', '-v'
-            ]
-        )
+        exclude = []
+        for devname in Defaults.get_exclude_list_for_non_physical_devices():
+            exclude.append('-e')
+            exclude.append(f'/{devname}')
+        # setfiles doesn't come with a stable command API and older versions
+        # needs a different invocation syntax. On older versions the usage
+        # information explicitly lists "setfiles -c policyfile" which is not
+        # present in newer versions. As setfiles doesn't come with a simple
+        # --version option, checking for this extra element in the usage
+        # was the only pointer I could come up with to differentiate the
+        # call options.
+        if CommandCapabilities.has_option_in_help(
+            'setfiles', 'setfiles -c policyfile', ['--help'],
+            root=self.root_dir, raise_on_error=False
+        ):
+            Command.run(
+                [
+                    'chroot', self.root_dir, 'setfiles',
+                    '-c', self._find_selinux_policy_file(
+                        self.xml_state.build_type.get_selinux_policy() or 'targeted'
+                    ), security_context_file
+                ]
+            )
+            Command.run(
+                [
+                    'chroot', self.root_dir, 'setfiles',
+                    '-F', '-p'
+                ] + exclude + [
+                    security_context_file, '/'
+                ]
+            )
+        else:
+            Command.run(
+                [
+                    'chroot', self.root_dir, 'setfiles',
+                    '-F', '-p', '-c', self._find_selinux_policy_file(
+                        self.xml_state.build_type.get_selinux_policy() or 'targeted'
+                    )
+                ] + exclude + [
+                    security_context_file, '/'
+                ]
+            )
+
+    def setup_selinux_file_contexts(self) -> None:
+        """
+        Set SELinux file security contexts if the default context file is found
+        """
+        security_context = '/etc/selinux/targeted/contexts/files/file_contexts'
+        if os.path.exists(self.root_dir + security_context):
+            if Path.which(filename='setfiles', access_mode=os.X_OK, root_dir=self.root_dir):
+                self.set_selinux_file_contexts(security_context)
+            else:
+                log.warning(
+                    'security_context found but setfiles tool not installed'
+                )
 
     def export_modprobe_setup(self, target_root_dir: str) -> None:
         """
@@ -587,6 +669,14 @@ class SystemSetup:
             defaults.POST_DISK_SYNC_SCRIPT
         )
 
+    def call_pre_disk_script(self) -> None:
+        """
+        Call pre_disk_sync.sh script chrooted
+        """
+        self._call_script(
+            defaults.PRE_DISK_SYNC_SCRIPT
+        )
+
     def call_post_bootstrap_script(self) -> None:
         """
         Call post_bootstrap.sh script chrooted
@@ -601,6 +691,24 @@ class SystemSetup:
         """
         self._call_script(
             defaults.POST_PREPARE_SCRIPT
+        )
+
+    def call_config_overlay_script(self) -> None:
+        """
+        Call config-overlay.sh script chrooted
+        """
+        self._call_script(
+            defaults.POST_PREPARE_OVERLAY_SCRIPT
+        )
+
+    def call_config_host_overlay_script(self, working_directory: str = None) -> None:
+        """
+        Call config-host-overlay.sh script _NON_ chrooted
+        """
+        self._call_script_no_chroot(
+            name=defaults.POST_HOST_PREPARE_OVERLAY_SCRIPT,
+            option_list=[],
+            working_directory=working_directory
         )
 
     def call_image_script(self) -> None:
@@ -695,8 +803,8 @@ class SystemSetup:
             Path.wipe(fstab_patch_file)
 
         if os.path.exists(fstab_script_file):
-            Command.run(
-                ['chroot', self.root_dir, '/etc/fstab.script']
+            self._call_script(
+                name='etc/fstab.script', path_prefix=''
             )
             Path.wipe(fstab_script_file)
 
@@ -738,11 +846,9 @@ class SystemSetup:
             'partition_filesystem':
                 self.root_dir + '/recovery.tar.filesystem'
         }
-        recovery_archive = NamedTemporaryFile(
-            delete=False
-        )
+        pathlib.Path(metadata['archive_name']).touch()
         archive = ArchiveTar(
-            filename=recovery_archive.name,
+            filename=metadata['archive_name'],
             create_from_file_list=False
         )
         archive.create(
@@ -753,9 +859,6 @@ class SystemSetup:
                 '--hard-dereference',
                 '--preserve-permissions'
             ]
-        )
-        Command.run(
-            ['mv', recovery_archive.name, metadata['archive_name']]
         )
         # recovery.tar.filesystem
         recovery_filesystem = self.xml_state.build_type.get_filesystem()
@@ -815,8 +918,16 @@ class SystemSetup:
             Path.wipe(metadata['archive_name'] + '.gz')
 
     def _process_user_options(
-        self, password_format, password, user_shell, user_groups,
-        user_id, user_realname, user_exists, home_path
+        self,
+        password_format: str = '',
+        password: str = '',
+        user_shell: str = '',
+        user_groups: List[str] = [],
+        user_id: str = '',
+        group_id: str = '',
+        user_realname: str = '',
+        user_exists: bool = True,
+        home_path: str = ''
     ):
         options = []
         if password_format == 'plain':
@@ -836,6 +947,9 @@ class SystemSetup:
         if user_id:
             options.append('-u')
             options.append('{0}'.format(user_id))
+        if group_id:
+            options.append('-g')
+            options.append('{0}'.format(group_id))
         if user_realname:
             options.append('-c')
             options.append(user_realname)
@@ -929,8 +1043,20 @@ class SystemSetup:
                 filepath=defaults.POST_PREPARE_SCRIPT,
                 raise_if_not_exists=False
             ),
+            defaults.POST_PREPARE_OVERLAY_SCRIPT: script_type(
+                filepath=defaults.POST_PREPARE_OVERLAY_SCRIPT,
+                raise_if_not_exists=False
+            ),
+            defaults.POST_HOST_PREPARE_OVERLAY_SCRIPT: script_type(
+                filepath=defaults.POST_HOST_PREPARE_OVERLAY_SCRIPT,
+                raise_if_not_exists=False
+            ),
             defaults.PRE_CREATE_SCRIPT: script_type(
                 filepath=defaults.PRE_CREATE_SCRIPT,
+                raise_if_not_exists=False
+            ),
+            defaults.PRE_DISK_SYNC_SCRIPT: script_type(
+                filepath=defaults.PRE_DISK_SYNC_SCRIPT,
                 raise_if_not_exists=False
             ),
             defaults.POST_DISK_SYNC_SCRIPT: script_type(
@@ -993,15 +1119,23 @@ class SystemSetup:
                 ]
             )
 
-    def _call_script(self, name, option_list=None):
-        script_path = os.path.join(self.root_dir, 'image', name)
+    def _call_script(
+        self, name, option_list=None, path_prefix=defaults.IMAGE_METADATA_DIR
+    ):
+        script_path = os.path.join(self.root_dir, path_prefix, name)
         if os.path.exists(script_path):
             options = option_list or []
-            command = ['chroot', self.root_dir]
+            if log.getLogFlags().get('run-scripts-in-screen'):
+                # Run scripts in a screen session if requested
+                command = ['screen', '-t', '-X', 'chroot', self.root_dir]
+            else:
+                # In standard mode run scripts without a terminal
+                # associated to them
+                command = ['chroot', self.root_dir]
             if not Path.access(script_path, os.X_OK):
                 command.append('bash')
             command.append(
-                os.path.join(defaults.IMAGE_METADATA_DIR, name)
+                os.path.join(os.sep, path_prefix, name)
             )
             command.extend(options)
             profile = Profile(self.xml_state)
@@ -1016,6 +1150,8 @@ class SystemSetup:
                 raise KiwiScriptFailed(
                     '{0} failed: {1}'.format(name, result.stderr)
                 )
+            # if configured, assign SELinux labels
+            self.setup_selinux_file_contexts()
 
     def _call_script_no_chroot(
         self, name, option_list, working_directory
@@ -1030,9 +1166,16 @@ class SystemSetup:
                 'cd', working_directory, '&&',
                 'bash', '--norc', script_path, ' '.join(option_list)
             ]
-            config_script = Command.call(
-                ['bash', '-c', ' '.join(bash_command)]
-            )
+            if log.getLogFlags().get('run-scripts-in-screen'):
+                # Run scripts in a screen session if requested
+                config_script = Command.call(
+                    ['screen', '-t', '-X', 'bash', '-c', ' '.join(bash_command)]
+                )
+            else:
+                # In standard mode run script through bash
+                config_script = Command.call(
+                    ['bash', '-c', ' '.join(bash_command)]
+                )
             process = CommandProcess(
                 command=config_script, log_topic='Calling ' + name + ' script'
             )
@@ -1239,4 +1382,39 @@ class SystemSetup:
         )
         data.sync_data(
             options=sync_options
+        )
+
+    def _get_repo_customization_script(self, xml_repo: repository) -> str:
+        script_path = xml_repo.get_customize()
+        if script_path and not os.path.isabs(script_path):
+            script_path = os.path.join(self.description_dir, script_path)
+        return script_path
+
+    def _get_group_names_and_ids_for_user(self, user: str) -> OrderedDict:
+        group: OrderedDict = OrderedDict()
+        for group_match in self.xml_state.get_user_groups(user):
+            group_and_id = group_match.split(':')
+            group.update(
+                [(
+                    group_and_id[0],
+                    group_and_id[1] if len(group_and_id) > 1 else ''
+                )]
+            )
+        return group
+
+    def _find_selinux_policy_file(self, policy_name: str) -> str:
+        policy_dir = f'/etc/selinux/{policy_name}/policy'
+        policy_dir_in_root = self.root_dir + policy_dir
+        scandir_error = ''
+        try:
+            with os.scandir(policy_dir_in_root) as policy_path:
+                for entry in policy_path:
+                    if entry.is_file() and entry.name.startswith('policy.'):
+                        return os.path.join(policy_dir, entry.name)
+        except Exception as issue:
+            scandir_error = format(issue)
+        raise KiwiFileNotFound(
+            'Unable to find SELinux policy in {0!r} {1}'.format(
+                policy_dir_in_root, scandir_error
+            )
         )

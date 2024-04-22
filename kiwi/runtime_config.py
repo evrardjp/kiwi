@@ -74,6 +74,26 @@ class RuntimeConfig:
                 with open(config_file, 'r') as config:
                     RUNTIME_CONFIG = yaml.safe_load(config) or {}
 
+    def get_credentials_verification_metadata_signing_key_file(self):
+        """
+        Return verification metadata signing key file, used for
+        signature creation of rootfs verification metadata:
+
+        credentials:
+          - verification_metadata_signing_key_file: ...
+
+        There is no default value for this setting available
+
+        :return: file path name or ''
+
+        :rtype: str
+        """
+        signing_key_file = self._get_attribute(
+            element='credentials',
+            attribute='verification_metadata_signing_key_file'
+        )
+        return signing_key_file if signing_key_file else ''
+
     def get_obs_download_server_url(self):
         """
         Return URL of buildservice download server in:
@@ -231,27 +251,27 @@ class RuntimeConfig:
 
     def get_container_compression(self):
         """
-        Return compression algorithm to use for compression of container images
+        Return compression for container images
 
         container:
-          - compress: xz|none
+          - compress: xz|none|true|false
 
         if no or invalid configuration data is provided, the default
-        compression algorithm from the Defaults class is returned
+        compression from the Defaults class is returned
 
-        :return: A name
+        :return: True or False
 
-        :rtype: str
+        :rtype: bool
         """
         container_compression = self._get_attribute(
             element='container', attribute='compress'
         )
-        if not container_compression:
+        if container_compression is None:
             return Defaults.get_container_compression()
-        elif 'xz' in container_compression:
-            return container_compression
-        elif 'none' in container_compression:
-            return None
+        elif 'xz' == container_compression or container_compression is True:
+            return True
+        elif 'none' == container_compression or container_compression is False:
+            return False
         else:
             log.warning(
                 'Skipping invalid container compression: {0}'.format(
@@ -265,7 +285,7 @@ class RuntimeConfig:
         Return tool category which should be used to build iso images
 
         iso:
-          - tool_category: cdrtools|xorriso
+          - tool_category: xorriso
 
         if no or invalid configuration exists the default tool category
         from the Defaults class is returned
@@ -279,7 +299,7 @@ class RuntimeConfig:
         )
         if not iso_tool_category:
             return Defaults.get_iso_tool_category()
-        elif 'cdrtools' in iso_tool_category or 'xorriso' in iso_tool_category:
+        elif 'xorriso' in iso_tool_category:
             return iso_tool_category
         else:
             log.warning(
@@ -308,6 +328,25 @@ class RuntimeConfig:
             element='oci', attribute='archive_tool'
         )
         return oci_archive_tool or Defaults.get_oci_archive_tool()
+
+    def get_mapper_tool(self):
+        """
+        Return partition mapper tool
+
+        mapper:
+          - part_mapper: partx
+
+        if no configuration exists the default tool from the
+        Defaults class is returned
+
+        :return: A name
+
+        :rtype: str
+        """
+        part_mapper_tool = self._get_attribute(
+            element='mapper', attribute='part_mapper'
+        )
+        return part_mapper_tool or Defaults.get_part_mapper_tool()
 
     def get_max_size_constraint(self):
         """

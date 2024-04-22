@@ -55,9 +55,8 @@ following optional attributes:
 
 - `alias`: Name to be used for this repository, it will appear as the
   repository's name in the image, which is visible via ``zypper repos`` or
-  ``dnf repolist``. {kiwi} will construct an alias from the path in the
-  `source` child element (replacing each `/` with a `_`), if no value is
-  given.
+  ``dnf repolist``. {kiwi} will construct an alias name as result of hex 
+  representation from uuid4, if no value is given.
 
 - `repository_gpgcheck`: Specify whether or not this specific repository is
   configured to to run repository signature validation. If not set, the
@@ -73,6 +72,28 @@ following optional attributes:
 - `distribution`: Distribution name information, used for deb repositories.
 
 - `profiles`: List of profiles to which this repository applies.
+
+- `customize`: Script to run custom modifications to the repo file(s).
+  repo files allows for several customization options which not all of them
+  are supported to be set by kiwi through the current repository schema.
+  As the options used do not follow any standard and are not compatible
+  between package managers and distributions, the only generic way to handle
+  this is through a script hook which is invoked with the repo file as
+  parameter for each file created by {kiwi}.
+
+  An example for a script call to add the `module_hotfixes` option
+  for a `dnf` compatible repository configuration could look like
+  this
+
+  .. code:: bash
+
+     repo_file=$1
+     echo 'module_hotfixes = 1' >> ${repo_file}
+
+  .. note::
+
+     If the script is provided as relative path it will
+     be searched in the image description directory
 
 .. _supported-repository-paths:
 

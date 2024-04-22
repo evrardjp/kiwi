@@ -1,7 +1,7 @@
 .. kiwi documentation master file
 
-{kiwi} Documentation
-=====================
+Building Linux System Appliances
+================================
 
 .. note::
    This documentation covers {kiwi-product} |version|- the command line
@@ -20,7 +20,7 @@
    quickstart
    commands
    troubleshooting
-   self_contained
+   plugins
    concept_and_workflow
    image_description
    image_types_and_results
@@ -45,11 +45,11 @@
 
    * `Build Tests Fedora(x86) <https://build.opensuse.org/project/show/Virtualization:Appliances:Images:Testing_x86:fedora>`__
    * `Build Tests Fedora(arm) <https://build.opensuse.org/project/show/Virtualization:Appliances:Images:Testing_arm:fedora>`__
-   * `Build Tests Fedora(ppc64le) <https://build.opensuse.org/project/show/Virtualization:Appliances:Images:Testing_ppc:fedora>`__
 
    * `Build Tests CentOS(x86) <https://build.opensuse.org/project/show/Virtualization:Appliances:Images:Testing_x86:centos>`__
 
    * `Build Tests Ubuntu(x86) <https://build.opensuse.org/project/show/Virtualization:Appliances:Images:Testing_x86:ubuntu>`__
+   * `Build Tests Ubuntu(arm) <https://build.opensuse.org/project/show/Virtualization:Appliances:Images:Testing_arm:ubuntu>`__
 
    * `Build Tests Debian(x86) <https://build.opensuse.org/project/show/Virtualization:Appliances:Images:Testing_x86:debian>`__
 
@@ -116,6 +116,8 @@ Embedded Systems
 And More
   ...
 
+.. _contact:
+
 Contact
 -------
 
@@ -128,5 +130,7 @@ Contact
 * `Matrix <https://matrix.org>`__
 
   An open network for secure, decentralized communication. Please find the
-  ``#kiwi`` room via `Riot <https://riot.im/app/>`__ on the web or by using
-  the supported `clients <https://matrix.org/docs/projects/clients-matrix>`__.
+  ``#kiwi:matrix.org`` room via
+  `Matrix <https://matrix.to/#kiwi:matrix.org>`__ on the web
+  or by using the supported
+  `clients <https://matrix.org/docs/projects/clients-matrix>`__.

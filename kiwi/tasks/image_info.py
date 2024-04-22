@@ -21,7 +21,7 @@ usage: kiwi-ng image info -h | --help
            [--resolve-package-list]
            [--ignore-repos]
            [--add-repo=<source,type,alias,priority>...]
-           [--print-xml|--print-yaml]
+           [--print-xml|--print-yaml|--print-toml]
        kiwi-ng image info help
 
 commands:
@@ -40,7 +40,7 @@ options:
         solve package dependencies and return a list of all
         packages including their attributes e.g size,
         shasum, etc...
-    --print-xml|--print-yaml
+    --print-xml|--print-yaml|--print-toml
         print image description in specified format
 """
 import os
@@ -73,7 +73,7 @@ class ImageInfoTask(CliTask):
             return self.manual.show('kiwi::image::info')
 
         self.load_xml_description(
-            self.command_args['--description']
+            self.command_args['--description'], self.global_args['--kiwi-file']
         )
 
         if self.command_args['--ignore-repos']:
@@ -141,11 +141,17 @@ class ImageInfoTask(CliTask):
                 self.description.markup.get_yaml_description(),
                 'Description(YAML):'
             )
+        elif self.command_args['--print-toml']:
+            DataOutput.display_file(
+                self.description.markup.get_toml_description(),
+                'Description(TOML):'
+            )
 
     def _setup_solver(self):
         solver = Sat()
         for xml_repo in self.xml_state.get_repository_sections_used_for_build():
             repo_source = xml_repo.get_source().get_path()
+            repo_sourcetype = xml_repo.get_sourcetype() or ''
             repo_user = xml_repo.get_username()
             repo_secret = xml_repo.get_password()
             repo_type = xml_repo.get_type()
@@ -153,7 +159,8 @@ class ImageInfoTask(CliTask):
             repo_components = xml_repo.get_components()
             if not repo_type:
                 repo_type = SolverRepositoryBase(
-                    Uri(repo_source), repo_user, repo_secret
+                    Uri(uri=repo_source, source_type=repo_sourcetype),
+                    repo_user, repo_secret
                 ).get_repo_type()
             if repo_type == 'apt-deb':
                 # Debian based repos can be setup for a specific
@@ -173,14 +180,18 @@ class ImageInfoTask(CliTask):
                         )
                         solver.add_repository(
                             SolverRepository.new(
-                                Uri(repo_source_for_component, repo_type),
+                                Uri(
+                                    repo_source_for_component,
+                                    repo_type, repo_sourcetype
+                                ),
                                 repo_user, repo_secret
                             )
                         )
                     continue
             solver.add_repository(
                 SolverRepository.new(
-                    Uri(repo_source, repo_type), repo_user, repo_secret
+                    Uri(repo_source, repo_type, repo_sourcetype),
+                    repo_user, repo_secret
                 )
             )
         return solver

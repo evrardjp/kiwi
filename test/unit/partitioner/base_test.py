@@ -12,6 +12,9 @@ class TestPartitionerBase:
         )
         self.partitioner = PartitionerBase(disk_provider)
 
+    def setup_method(self, cls):
+        self.setup()
+
     def test_get_id(self):
         assert self.partitioner.get_id() == 0
 
@@ -34,3 +37,6 @@ class TestPartitionerBase:
     def test_resize_table(self):
         with raises(NotImplementedError):
             self.partitioner.resize_table()
+
+    def test_set_start_sector(self):
+        assert self.partitioner.set_start_sector(4096) is None

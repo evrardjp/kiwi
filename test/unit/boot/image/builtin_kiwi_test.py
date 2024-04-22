@@ -17,10 +17,12 @@ from kiwi.exceptions import KiwiConfigFileNotFound
 
 
 class TestBootImageKiwi:
-    @patch('kiwi.boot.image.builtin_kiwi.mkdtemp')
+    @patch('kiwi.boot.image.builtin_kiwi.Temporary')
     @patch('kiwi.boot.image.builtin_kiwi.os.path.exists')
     @patch('kiwi.defaults.Defaults.get_boot_image_description_path')
-    def setup(self, mock_boot_path, mock_exists, mock_mkdtemp):
+    def setup(self, mock_boot_path, mock_exists, mock_Temporary):
+        mock_Temporary.return_value.new_dir.return_value.name = \
+            'boot-root-directory'
         mock_boot_path.return_value = '../data'
         Defaults.set_platform_name('x86_64')
         mock_exists.return_value = True
@@ -46,19 +48,25 @@ class TestBootImageKiwi:
         kiwi.boot.image.builtin_kiwi.Profile = Mock(
             return_value=self.profile
         )
-        mock_mkdtemp.return_value = 'boot-root-directory'
         self.boot_image = BootImageKiwi(
             self.xml_state, 'some-target-dir'
         )
+
+    @patch('kiwi.boot.image.builtin_kiwi.Temporary')
+    @patch('kiwi.boot.image.builtin_kiwi.os.path.exists')
+    @patch('kiwi.defaults.Defaults.get_boot_image_description_path')
+    def setup_method(self, cls, mock_boot_path, mock_exists, mock_Temporary):
+        self.setup()
 
     def test_include_file(self):
         # is a nop for builtin kiwi initrd and does nothing
         self.boot_image.include_file('/root/a')
 
     @patch('kiwi.defaults.Defaults.get_boot_image_description_path')
-    @patch('kiwi.boot.image.builtin_kiwi.mkdtemp')
-    def test_prepare(self, mock_mkdtemp, mock_boot_path):
-        mock_mkdtemp.return_value = 'boot-root-directory'
+    @patch('kiwi.boot.image.builtin_kiwi.Temporary')
+    def test_prepare(self, mock_Temporary, mock_boot_path):
+        mock_Temporary.return_value.new_dir.return_value.name = \
+            'boot-root-directory'
         mock_boot_path.return_value = '../data'
         self.boot_image.prepare()
         self.system_prepare.setup_repositories.assert_called_once_with(
@@ -87,11 +95,12 @@ class TestBootImageKiwi:
         self.setup.call_image_script.assert_called_once_with()
 
     @patch('os.path.exists')
-    @patch('kiwi.boot.image.builtin_kiwi.mkdtemp')
+    @patch('kiwi.boot.image.builtin_kiwi.Temporary')
     def test_prepare_no_boot_description_found(
-        self, mock_mkdtemp, mock_os_path
+        self, mock_Temporary, mock_os_path
     ):
-        mock_mkdtemp.return_value = 'boot-root-directory'
+        mock_Temporary.return_value.new_dir.return_value.name = \
+            'boot-root-directory'
         mock_os_path.return_value = False
         with raises(KiwiConfigFileNotFound):
             self.boot_image.post_init()
@@ -102,20 +111,17 @@ class TestBootImageKiwi:
     @patch('kiwi.boot.image.builtin_kiwi.Path.wipe')
     @patch('kiwi.boot.image.builtin_kiwi.DataSync')
     @patch('kiwi.boot.image.base.BootImageBase.is_prepared')
-    @patch('kiwi.boot.image.builtin_kiwi.mkdtemp')
     @patch('kiwi.boot.image.builtin_kiwi.os.chmod')
-    @patch('kiwi.boot.image.builtin_kiwi.TemporaryDirectory')
+    @patch('kiwi.boot.image.builtin_kiwi.Temporary')
     def test_create_initrd(
-        self, mock_TemporaryDirectory, mock_os_chmod,
-        mock_mkdtemp, mock_prepared, mock_sync,
-        mock_wipe, mock_create, mock_compress, mock_cpio
+        self, mock_Temporary, mock_os_chmod,
+        mock_prepared, mock_sync, mock_wipe, mock_create,
+        mock_compress, mock_cpio
     ):
         data = Mock()
         mock_sync.return_value = data
-        mock_mkdtemp.return_value = 'temp-boot-directory'
-        temporary_directory = Mock()
-        temporary_directory.name = 'temp-boot-directory'
-        mock_TemporaryDirectory.return_value = temporary_directory
+        mock_Temporary.return_value.new_dir.return_value.name = \
+            'temp-boot-directory'
         mock_prepared.return_value = True
         self.boot_image.boot_root_directory = 'boot-root-directory'
         mbrid = Mock()
@@ -131,7 +137,7 @@ class TestBootImageKiwi:
         mock_os_chmod.assert_called_once_with(
             'temp-boot-directory', 0o755
         )
-        data.sync_data.assert_called_once_with(options=['-a'])
+        data.sync_data.assert_called_once_with(options=['--archive', '--hard-links', '--xattrs', '--acls', '--one-file-system', '--inplace'])
         mock_cpio.assert_called_once_with(
             ''.join(
                 [
@@ -190,3 +196,6 @@ class TestBootImageKiwi:
 
     def teardown(self):
         sys.argv = argv_kiwi_tests
+
+    def teardown_method(self, cls):
+        self.teardown()

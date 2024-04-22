@@ -15,10 +15,11 @@
 # You should have received a copy of the GNU General Public License
 # along with kiwi.  If not, see <http://www.gnu.org/licenses/>
 #
-from tempfile import NamedTemporaryFile
 import logging
+from typing import List
 
 # project
+from kiwi.utils.temporary import Temporary
 from kiwi.command import Command
 from kiwi.partitioner.base import PartitionerBase
 
@@ -29,7 +30,7 @@ class PartitionerDasd(PartitionerBase):
     """
     **Implements DASD partition setup**
     """
-    def post_init(self):
+    def post_init(self) -> None:
         """
         Post initialization method
 
@@ -45,7 +46,9 @@ class PartitionerDasd(PartitionerBase):
             't.csm': None
         }
 
-    def create(self, name, mbsize, type_name, flags=None):
+    def create(
+        self, name: str, mbsize: int, type_name: str, flags: List[str] = None
+    ) -> None:
         """
         Create DASD partition
 
@@ -55,7 +58,7 @@ class PartitionerDasd(PartitionerBase):
         :param list flags: unused
         """
         self.partition_id += 1
-        fdasd_input = NamedTemporaryFile()
+        fdasd_input = Temporary().new_file()
         with open(fdasd_input.name, 'w') as partition:
             log.debug(
                 '%s: fdasd: n p cur_position +%sM w q',
@@ -80,7 +83,7 @@ class PartitionerDasd(PartitionerBase):
             # that point.
             log.debug('potential fdasd errors were ignored')
 
-    def resize_table(self, entries=None):
+    def resize_table(self, entries: int = None) -> None:
         """
         Resize partition table
 

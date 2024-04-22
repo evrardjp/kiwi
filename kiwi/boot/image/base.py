@@ -41,7 +41,9 @@ from kiwi.exceptions import (
 boot_names_type = NamedTuple(
     'boot_names_type', [
         ('kernel_name', str),
-        ('initrd_name', str)
+        ('initrd_name', str),
+        ('kernel_version', str),
+        ('kernel_filename', str)
     ]
 )
 
@@ -194,7 +196,9 @@ class BootImageBase:
 
                 boot_names_type(
                     kernel_name='INSTALLED_KERNEL',
-                    initrd_name='DRACUT_OUTPUT_NAME'
+                    initrd_name='DRACUT_OUTPUT_NAME',
+                    kernel_version='KERNEL_VERSION',
+                    kernel_filename='KERNEL_FILE_NAME'
                 )
 
         :rtype: boot_names_type
@@ -204,6 +208,11 @@ class BootImageBase:
         )
         kernel_info = kernel.get_kernel()
         if not kernel_info:
+            if self.xml_state.get_initrd_system() == 'none':
+                return boot_names_type(
+                    kernel_name='none', initrd_name='none',
+                    kernel_version='none', kernel_filename='none'
+                )
             raise KiwiDiskBootImageError(
                 'No kernel in boot image tree %s found' %
                 self.boot_root_directory
@@ -212,10 +221,12 @@ class BootImageBase:
             kernel_info.version
         )
         return boot_names_type(
+            kernel_version=kernel_info.version,
             kernel_name=kernel_info.name,
             initrd_name=dracut_output_format.format(
                 kernel_version=kernel_info.version
-            )
+            ),
+            kernel_filename=kernel_info.filename
         )
 
     def prepare(self) -> None:
@@ -459,11 +470,15 @@ class BootImageBase:
             'dracut', root_dir=self.boot_root_directory, access_mode=os.X_OK
         )
         if dracut_tool:
-            outfile_expression = r'outfile="/boot/(init.*\$kernel.*)"'
+            outfile_expression = r'outfile=".*/boot/(init.*kernel.*)"'
             with open(dracut_tool) as dracut:
                 matches = re.findall(outfile_expression, dracut.read())
                 if matches:
-                    return matches[0].replace('$kernel', '{kernel_version}')
+                    return matches[0].replace(
+                        '$kernel', '{kernel_version}'
+                    ).replace(
+                        '${kernel}', '{kernel_version}'
+                    )
         return None
 
     def _get_boot_image_output_file_format_from_existing_file(

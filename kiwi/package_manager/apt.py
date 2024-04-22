@@ -17,8 +17,11 @@
 #
 import re
 import os
+import glob
 import logging
-from typing import List
+from typing import (
+    List, Dict
+)
 
 # project
 from kiwi.command import command_call_type
@@ -28,9 +31,12 @@ from kiwi.package_manager.base import PackageManagerBase
 from kiwi.system.root_bind import RootBind
 from kiwi.repository.apt import RepositoryApt
 
+import kiwi.defaults as defaults
+
 from kiwi.exceptions import (
     KiwiDebootstrapError,
-    KiwiRequestError
+    KiwiRequestError,
+    KiwiFileNotFound
 )
 
 log = logging.getLogger('kiwi')
@@ -109,14 +115,102 @@ class PackageManagerApt(PackageManagerBase):
             'Package exclusion for (%s) not supported for apt-get', name
         )
 
+    def setup_repository_modules(
+        self, collection_modules: Dict[str, List[str]]
+    ) -> None:
+        """
+        Repository modules not supported for apt-get
+        The method does nothing in this scope
+
+        :param dict collection_modules: unused
+        """
+        pass
+
     def process_install_requests_bootstrap(
+        self, root_bind: RootBind = None, bootstrap_package: str = None
+    ) -> command_call_type:
+        """
+        Process package install requests for bootstrap phase (no chroot)
+        Either debootstrap or a prebuilt bootstrap package can be used
+        to bootstrap a new system.
+
+        :param object root_bind:
+            instance of RootBind to manage kernel file systems before
+            debootstrap call
+        :param str bootstrap_package:
+            package name of a bootstrap package
+
+        :return: process results as command instance
+
+        :rtype: command_call_type
+        """
+        if bootstrap_package:
+            return self._process_install_requests_bootstrap_prebuild_root(
+                bootstrap_package
+            )
+        else:
+            return self._process_install_requests_bootstrap_debootstrap(
+                root_bind
+            )
+
+    def _process_install_requests_bootstrap_prebuild_root(
+        self, bootstrap_package: str
+    ) -> command_call_type:
+        """
+        Process bootstrap phase (no chroot) using a prebuilt bootstrap
+        package. The package has to provide a tarball below the
+        directory /var/cache/kiwi/bootstrap/PACKAGE_NAME.ARCH.tar.xz
+        and will be unpacked to serve as the bootstrap root.
+
+        The optionally listed packages in the kiwi bootstrap section
+        will be installed as part of a chroot install and returned
+        as command instance
+
+        :param str bootstrap_package:
+            package name of the bootstrap package containing the
+            bootstrap root as a tarball
+
+        :return: process results as command instance
+
+        :rtype: command_call_type
+        """
+        # Install prebuilt bootstrap package on build host
+        update_command = [
+            'apt-get'
+        ] + self.apt_get_args + self.custom_args + [
+            'update'
+        ]
+        install_command = [
+            'apt-get'
+        ] + self.apt_get_args + self.custom_args + [
+            'install', bootstrap_package
+        ]
+        Command.run(
+            update_command, self.command_env
+        )
+        Command.run(
+            install_command, self.command_env
+        )
+        # Unpack prebuilt bootstrap root tarball as new root
+        bootstrap_root_tarball = '/var/lib/bootstrap/{0}.{1}.tar.xz'.format(
+            bootstrap_package, defaults.PLATFORM_MACHINE
+        )
+        if not os.path.isfile(bootstrap_root_tarball):
+            raise KiwiFileNotFound(
+                f'bootstrap tarball: {bootstrap_root_tarball!r} not found'
+            )
+        Command.run(
+            ['tar', '-C', self.root_dir, '-xf', bootstrap_root_tarball]
+        )
+        # Install eventual bootstrap packages as standard system install
+        return self.process_install_requests()
+
+    def _process_install_requests_bootstrap_debootstrap(
         self, root_bind: RootBind = None
     ) -> command_call_type:
         """
         Process package install requests for bootstrap phase (no chroot)
-        The debootstrap program is used to bootstrap a new system with
-        a collection of predefined packages. The kiwi bootstrap section
-        information is not used in this case
+        The debootstrap program is used to bootstrap a new system
 
         :param object root_bind: instance of RootBind to manage kernel
             file systems before debootstrap call
@@ -124,7 +218,9 @@ class PackageManagerApt(PackageManagerBase):
         :raises KiwiDebootstrapError: if no main distribution repository
             is configured, if the debootstrap script is not found or if the
             debootstrap script execution fails
+
         :return: process results in command type
+
         :rtype: namedtuple
         """
         if not self.distribution:
@@ -179,9 +275,9 @@ class PackageManagerApt(PackageManagerBase):
                     )
                 )
             self.cleanup_requests()
-            cmd.extend([
-                self.distribution, self.root_dir, self.distribution_path
-            ])
+            cmd.extend(
+                [self.distribution, self.root_dir, self.distribution_path]
+            )
 
             return Command.call(cmd, self.command_env)
         except Exception as e:
@@ -189,8 +285,24 @@ class PackageManagerApt(PackageManagerBase):
                 '%s: %s' % (type(e).__name__, format(e))
             )
 
+    def get_error_details(self) -> str:
+        """
+        Provide further error details
+
+        Read the debootstrap log if available
+
+        :rtype: str
+        """
+        debootstrap_log_file = os.path.join(
+            self.root_dir, 'debootstrap/debootstrap.log'
+        )
+        if os.path.exists(debootstrap_log_file):
+            with open(debootstrap_log_file) as log_fd:
+                return log_fd.read() or 'logfile is empty'
+        return f'logfile {debootstrap_log_file!r} does not exist'
+
     def post_process_install_requests_bootstrap(
-        self, root_bind: RootBind = None
+        self, root_bind: RootBind = None, delta_root: bool = False
     ) -> None:
         """
         Mounts the kernel file systems to the chroot environment is
@@ -198,9 +310,11 @@ class PackageManagerApt(PackageManagerBase):
 
         :param object root_bind:
             instance of RootBind to manage kernel file systems
+        :param bool delta_root:
+            root is derived from a base system
         """
         if root_bind:
-            root_bind.mount_kernel_file_systems()
+            root_bind.mount_kernel_file_systems(delta_root)
 
     def process_install_requests(self) -> command_call_type:
         """
@@ -257,9 +371,57 @@ class PackageManagerApt(PackageManagerBase):
                 'None of the requested packages to delete are installed'
             )
 
+        # deleting debs for some reason can also trigger package
+        # scripts from the libc-bin (glibc) package. This often
+        # results in calls like ldconfig which failed unless the
+        # system would be really running. Since the deletion
+        # happens via chroot and with the system in offline mode
+        # many attempts to uninstall a package, even cracefully
+        # failed for this reason. So far I only saw the workaround
+        # to make ldconfig a noop during the process of uninstall.
+        # This is not a nice solution and I dislike it. However,
+        # the only one I could come up with to turn the package
+        # uninstall in a useful feature in kiwi.
+        Command.run(
+            [
+                'cp',
+                f'{self.root_dir}/usr/sbin/ldconfig',
+                f'{self.root_dir}/usr/sbin/ldconfig.orig'
+            ]
+        )
+        Command.run(
+            [
+                'cp',
+                f'{self.root_dir}/usr/bin/true',
+                f'{self.root_dir}/usr/sbin/ldconfig'
+            ]
+        )
         if force:
+            # force deleting debs only worked well for me when ignoring
+            # the pre/post-inst and pre/post-remove codings. No idea why it
+            # ends in so many conflicts but if you want to force get rid
+            # of stuff this was the only way I could come up with. There
+            # are still cases when it does not work depending on the many
+            # code that runs on deleting
+            for package in delete_items:
+                pre_delete_pattern = \
+                    f'{self.root_dir}/var/lib/dpkg/info/{package}*.pre*'
+                post_delete_pattern = \
+                    f'{self.root_dir}/var/lib/dpkg/info/{package}*.post*'
+                for delete_file in glob.iglob(pre_delete_pattern):
+                    Path.wipe(delete_file)
+                for delete_file in glob.iglob(post_delete_pattern):
+                    Path.wipe(delete_file)
+
             apt_get_command = ['chroot', self.root_dir, 'dpkg']
-            apt_get_command.extend(['--force-all', '-r'])
+            apt_get_command.extend(
+                [
+                    '--remove',
+                    '--force-remove-reinstreq',
+                    '--force-remove-essential',
+                    '--force-depends'
+                ]
+            )
             apt_get_command.extend(delete_items)
         else:
             apt_get_command = ['chroot', self.root_dir, 'apt-get']
@@ -272,6 +434,22 @@ class PackageManagerApt(PackageManagerBase):
 
         return Command.call(
             apt_get_command, self.command_env
+        )
+
+    def post_process_delete_requests(
+        self, root_bind: RootBind = None
+    ) -> None:
+        """
+        Revert system changes done prior deleting packages
+
+        :param object root_bind: unused
+        """
+        Command.run(
+            [
+                'mv',
+                f'{self.root_dir}/usr/sbin/ldconfig.orig',
+                f'{self.root_dir}/usr/sbin/ldconfig'
+            ]
         )
 
     def update(self) -> command_call_type:

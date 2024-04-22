@@ -17,7 +17,9 @@
 #
 import re
 import os
-from typing import List
+from typing import (
+    List, Dict
+)
 
 
 # project
@@ -99,13 +101,25 @@ class PackageManagerZypper(PackageManagerBase):
         """
         self.exclude_requests.append(name)
 
+    def setup_repository_modules(
+        self, collection_modules: Dict[str, List[str]]
+    ) -> None:
+        """
+        Repository modules not supported for zypper.
+        The method does nothing in this scope
+
+        :param dict collection_modules: unused
+        """
+        pass
+
     def process_install_requests_bootstrap(
-        self, root_bind: RootBind = None
+        self, root_bind: RootBind = None, bootstrap_package: str = None
     ) -> command_call_type:
         """
         Process package install requests for bootstrap phase (no chroot)
 
         :param object root_bind: unused
+        :param str bootstrap_package: unused
 
         :return: process results in command type
 
@@ -163,19 +177,22 @@ class PackageManagerZypper(PackageManagerBase):
 
         :rtype: namedtuple
         """
-        delete_items = []
-        for delete_item in self._delete_items():
-            try:
-                Command.run(['chroot', self.root_dir, 'rpm', '-q', delete_item])
-                delete_items.append(delete_item)
-            except Exception:
-                # ignore packages which are not installed
-                pass
-        if not delete_items:
-            raise KiwiRequestError(
-                'None of the requested packages to delete are installed'
-            )
         if force:
+            delete_items = []
+            for delete_item in self._delete_items():
+                try:
+                    Command.run(
+                        ['chroot', self.root_dir, 'rpm', '-q', delete_item]
+                    )
+                    delete_items.append(delete_item)
+                except Exception:
+                    # ignore packages which are not installed
+                    pass
+            if not delete_items:
+                raise KiwiRequestError(
+                    'None of the requested packages to delete are installed'
+                )
+            self.cleanup_requests()
             force_options = ['--nodeps', '--allmatches', '--noscripts']
             return Command.call(
                 [
@@ -184,13 +201,14 @@ class PackageManagerZypper(PackageManagerBase):
                 self.chroot_command_env
             )
         else:
+            zypper_command = [
+                'chroot', self.root_dir, 'zypper'
+            ] + self.chroot_zypper_args + [
+                'remove', '-u', '--force-resolution'
+            ] + self._delete_items()
+            self.cleanup_requests()
             return Command.call(
-                [
-                    'chroot', self.root_dir, 'zypper'
-                ] + self.chroot_zypper_args + [
-                    'remove', '-u', '--force-resolution'
-                ] + delete_items,
-                self.chroot_command_env
+                zypper_command, self.chroot_command_env
             )
 
     def update(self) -> command_call_type:
@@ -269,16 +287,18 @@ class PackageManagerZypper(PackageManagerBase):
         )
 
     def post_process_install_requests_bootstrap(
-        self, root_bind: RootBind = None
+        self, root_bind: RootBind = None, delta_root: bool = False
     ) -> None:
         """
         Move the rpm database to the place as it is expected by the
         rpm package installed during bootstrap phase
 
         :param object root_bind: unused
+        :param bool delta_root: unused
         """
         rpmdb = RpmDataBase(self.root_dir)
         if rpmdb.has_rpm():
+            rpmdb.rebuild_database()
             rpmdb.set_database_to_image_path()
 
     @staticmethod

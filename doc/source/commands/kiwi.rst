@@ -12,24 +12,38 @@ SYNOPSIS
 
    kiwi-ng -h | --help
    kiwi-ng [--profile=<name>...]
+           [--temp-dir=<directory>]
            [--type=<build_type>]
            [--logfile=<filename>]
+           [--logsocket=<socketfile>]
+           [--loglevel=<number>]
            [--debug]
+           [--debug-run-scripts-in-screen]
            [--color-output]
            [--config=<configfile>]
+           [--kiwi-file=<kiwifile>]
        image <command> [<args>...]
-   kiwi-ng [--debug]
+   kiwi-ng [--logfile=<filename>]
+           [--logsocket=<socketfile>]
+           [--loglevel=<number>]
+           [--debug]
+           [--debug-run-scripts-in-screen]
            [--color-output]
            [--config=<configfile>]
        result <command> [<args>...]
    kiwi-ng [--profile=<name>...]
            [--shared-cache-dir=<directory>]
+           [--temp-dir=<directory>]
            [--target-arch=<name>]
            [--type=<build_type>]
            [--logfile=<filename>]
+           [--logsocket=<socketfile>]
+           [--loglevel=<number>]
            [--debug]
+           [--debug-run-scripts-in-screen]
            [--color-output]
            [--config=<configfile>]
+           [--kiwi-file=<kiwifile>]
        system <command> [<args>...]
    kiwi-ng compat <legacy_args>...
    kiwi-ng -v | --version
@@ -94,18 +108,49 @@ GLOBAL OPTIONS
 
 --debug
 
-  Print debug information on the commandline.
+  Print debug information on the commandline. Same as: '--loglevel 10'
+
+--debug-run-scripts-in-screen
+
+  Run scripts called by kiwi in a screen session.
 
 --logfile=<filename>
 
-  Specify log file. the logfile contains detailed information about
-  the process.
+  Specify log file. The logfile contains detailed information about
+  the process. The special call: `--logfile stdout` sends all
+  information to standard out instead of writing to a file
+
+--logsocket=<socketfile>
+
+  send log data to the given Unix Domain socket in the same
+  format as with --logfile
+
+--loglevel=<number>
+
+  specify logging level as number. Details about the
+  available log levels can be found at:
+  https://docs.python.org/3/library/logging.html#logging-levels
+  Setting a log level causes all message >= level to be
+  displayed.
+
+  .. code:: bash
+
+     ----------------------------
+     | Level    | Numeric value |
+     ----------------------------
+     | CRITICAL | 50            |
+     | ERROR    | 40            |
+     | WARNING  | 30            |
+     | INFO     | 20            |
+     | DEBUG    | 10            |
+     | NOTSET   | 0             |
+     ----------------------------
 
 --profile=<name>
 
   Select profile to use. The specified profile must be part of the
   XML description. The option can be specified multiple times to
-  allow using a combination of profiles
+  allow using a combination of profiles.
 
 --shared-cache-dir=<directory>
 
@@ -113,7 +158,13 @@ GLOBAL OPTIONS
   is shared via bind mount between the build host and image
   root system and contains information about package repositories
   and their cache and meta data. The default location is set
-  to /var/cache/kiwi
+  to `/var/cache/kiwi`.
+
+--temp-dir=<directory>
+
+  Specify an alternative base temporary directory. The
+  provided path is used as base directory to store temporary
+  files and directories. By default `/var/tmp` is used.
 
 --target-arch=<name>
 
@@ -129,6 +180,12 @@ GLOBAL OPTIONS
 
   Select image build type. The specified build type must be configured
   as part of the XML description.
+
+--kiwi-file=<kiwifile>
+
+  Basename of kiwi file which contains the main image
+  configuration elements. If not specified kiwi searches for
+  a file named `config.xml` or a file matching `*.kiwi`
 
 --version
 

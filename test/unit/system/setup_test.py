@@ -19,7 +19,8 @@ from kiwi.defaults import Defaults
 
 from kiwi.exceptions import (
     KiwiScriptFailed,
-    KiwiImportDescriptionError
+    KiwiImportDescriptionError,
+    KiwiFileNotFound
 )
 
 
@@ -39,6 +40,9 @@ class TestSystemSetup:
         self.xml_state = MagicMock()
         self.xml_state.get_package_manager = Mock(
             return_value='zypper'
+        )
+        self.xml_state.build_type.get_selinux_policy = Mock(
+            return_value=None
         )
         self.xml_state.build_type.get_filesystem = Mock(
             return_value='ext3'
@@ -69,9 +73,19 @@ class TestSystemSetup:
             error='stderr',
             returncode=0
         )
+        self.selinux_policies = os.scandir(
+            '../data/etc/selinux/targeted/policy'
+        )
+
+    @patch('kiwi.system.setup.RuntimeConfig')
+    def setup_method(self, cls, mock_RuntimeConfig):
+        self.setup()
 
     def teardown(self):
         sys.argv = argv_kiwi_tests
+
+    def teardown_method(self, cls):
+        self.teardown()
 
     def test_setup_ix86(self):
         Defaults.set_platform_name('i686')
@@ -96,6 +110,18 @@ class TestSystemSetup:
             '{0}/config-cdroot.tar*'.format(self.description_dir)
         )
         assert mock_command.call_args_list == [
+            call(
+                [
+                    'cp', '{0}/config-host-overlay.sh'.format(self.description_dir),
+                    'root_dir/image/config-host-overlay.sh'
+                ]
+            ),
+            call(
+                [
+                    'cp', '{0}/config-overlay.sh'.format(self.description_dir),
+                    'root_dir/image/config-overlay.sh'
+                ]
+            ),
             call(
                 [
                     'cp', '{0}/config.sh'.format(self.description_dir),
@@ -131,6 +157,12 @@ class TestSystemSetup:
                 [
                     'cp', '{0}/post_bootstrap.sh'.format(self.description_dir),
                     'root_dir/image/post_bootstrap.sh'
+                ]
+            ),
+            call(
+                [
+                    'cp', '{0}/pre_disk_sync.sh'.format(self.description_dir),
+                    'root_dir/image/pre_disk_sync.sh'
                 ]
             ),
             call(
@@ -162,7 +194,7 @@ class TestSystemSetup:
         self, mock_path, mock_command, mock_create
     ):
         path_return_values = [
-            True, False, True, True, True, True, True, True, True
+            True, False, True, True, True, True, True, True, True, True, True, True
         ]
 
         def side_effect(arg):
@@ -174,6 +206,18 @@ class TestSystemSetup:
             self.setup_with_real_xml.import_description()
 
         assert mock_command.call_args_list == [
+            call(
+                [
+                    'cp', '{0}/config-host-overlay.sh'.format(self.description_dir),
+                    'root_dir/image/config-host-overlay.sh'
+                ]
+            ),
+            call(
+                [
+                    'cp', '{0}/config-overlay.sh'.format(self.description_dir),
+                    'root_dir/image/config-overlay.sh'
+                ]
+            ),
             call(
                 [
                     'cp', '{0}/config.sh'.format(self.description_dir),
@@ -213,6 +257,12 @@ class TestSystemSetup:
             ),
             call(
                 [
+                    'cp', '{0}/pre_disk_sync.sh'.format(self.description_dir),
+                    'root_dir/image/pre_disk_sync.sh'
+                ]
+            ),
+            call(
+                [
                     'cp', Defaults.project_file('config/functions.sh'),
                     'root_dir/.kconfig'
                 ]
@@ -231,7 +281,7 @@ class TestSystemSetup:
     def test_import_description_configured_editboot_scripts_not_found(
         self, mock_path, mock_command
     ):
-        path_return_values = [False, True, True, True]
+        path_return_values = [False, True, True, True, True, True]
 
         def side_effect(arg):
             return path_return_values.pop()
@@ -248,7 +298,7 @@ class TestSystemSetup:
         self, mock_path, mock_command, mock_create
     ):
         path_return_values = [
-            False, False, True, True, True, True, True, True
+            False, False, True, True, True, True, True, True, True, True
         ]
 
         def side_effect(arg):
@@ -404,7 +454,9 @@ class TestSystemSetup:
         ])
 
     @patch('os.path.exists')
-    def test_setup_keyboard_skipped(self, mock_exists):
+    @patch('kiwi.system.setup.CommandCapabilities.has_option_in_help')
+    def test_setup_keyboard_skipped(self, mock_caps, mock_exists):
+        mock_caps.return_value = False
         mock_exists.return_value = False
         self.setup.preferences['keytable'] = 'keytable'
         with self._caplog.at_level(logging.WARNING):
@@ -488,7 +540,7 @@ class TestSystemSetup:
         calls = [
             call('users', []),
             call('kiwi', []),
-            call('admin', [])
+            call('admin', ['-g', '42'])
         ]
         users.group_add.assert_has_calls(calls)
 
@@ -614,6 +666,7 @@ class TestSystemSetup:
         m_open.assert_called_once_with('root_dir/etc/ImageID', 'w')
         m_open.return_value.write.assert_called_once_with('42\n')
 
+    @patch.object(SystemSetup, 'setup_selinux_file_contexts')
     @patch('kiwi.system.setup.Profile')
     @patch('kiwi.command.Command.call')
     @patch('kiwi.command_process.CommandProcess.poll_and_watch')
@@ -623,7 +676,7 @@ class TestSystemSetup:
     @patch('copy.deepcopy')
     def test_call_non_excutable_config_script(
         self, mock_copy_deepcopy, mock_access, mock_stat, mock_os_path,
-        mock_watch, mock_command, mock_Profile
+        mock_watch, mock_command, mock_Profile, mock_setup_selinux_file_contexts
     ):
         mock_copy_deepcopy.return_value = {}
         profile = Mock()
@@ -640,9 +693,11 @@ class TestSystemSetup:
         self.setup.call_config_script()
         mock_copy_deepcopy.assert_called_once_with(os.environ)
         mock_command.assert_called_once_with(
-            ['chroot', 'root_dir', 'bash', 'image/config.sh'], {}
+            ['chroot', 'root_dir', 'bash', '/image/config.sh'], {}
         )
+        mock_setup_selinux_file_contexts.assert_called_once_with()
 
+    @patch.object(SystemSetup, 'setup_selinux_file_contexts')
     @patch('kiwi.system.setup.Profile')
     @patch('kiwi.command.Command.call')
     @patch('kiwi.command_process.CommandProcess.poll_and_watch')
@@ -652,7 +707,7 @@ class TestSystemSetup:
     @patch('copy.deepcopy')
     def test_call_excutable_config_script(
         self, mock_copy_deepcopy, mock_access, mock_stat, mock_os_path,
-        mock_watch, mock_command, mock_Profile
+        mock_watch, mock_command, mock_Profile, mock_setup_selinux_file_contexts
     ):
         mock_copy_deepcopy.return_value = {}
         profile = Mock()
@@ -671,9 +726,11 @@ class TestSystemSetup:
 
         mock_copy_deepcopy.assert_called_once_with(os.environ)
         mock_command.assert_called_once_with(
-            ['chroot', 'root_dir', 'image/config.sh'], {}
+            ['chroot', 'root_dir', '/image/config.sh'], {}
         )
+        mock_setup_selinux_file_contexts.assert_called_once_with()
 
+    @patch.object(SystemSetup, 'setup_selinux_file_contexts')
     @patch('kiwi.system.setup.Profile')
     @patch('kiwi.command.Command.call')
     @patch('kiwi.command_process.CommandProcess.poll_and_watch')
@@ -683,7 +740,7 @@ class TestSystemSetup:
     @patch('copy.deepcopy')
     def test_call_excutable_post_bootstrap_script(
         self, mock_copy_deepcopy, mock_access, mock_stat, mock_os_path,
-        mock_watch, mock_command, mock_Profile
+        mock_watch, mock_command, mock_Profile, mock_setup_selinux_file_contexts
     ):
         mock_copy_deepcopy.return_value = {}
         profile = Mock()
@@ -702,9 +759,13 @@ class TestSystemSetup:
 
         mock_copy_deepcopy.assert_called_once_with(os.environ)
         mock_command.assert_called_once_with(
-            ['chroot', 'root_dir', 'image/post_bootstrap.sh'], {}
+            ['chroot', 'root_dir', '/image/post_bootstrap.sh'], {}
         )
+        mock_setup_selinux_file_contexts.assert_called_once_with()
 
+    @patch.object(SystemSetup, 'setup_selinux_file_contexts')
+    @patch('kiwi.system.setup.Defaults.is_buildservice_worker')
+    @patch('kiwi.logger.Logger.getLogFlags')
     @patch('kiwi.system.setup.Profile')
     @patch('kiwi.command.Command.call')
     @patch('kiwi.command_process.CommandProcess.poll_and_watch')
@@ -714,8 +775,13 @@ class TestSystemSetup:
     @patch('copy.deepcopy')
     def test_call_disk_script(
         self, mock_copy_deepcopy, mock_access, mock_stat, mock_os_path,
-        mock_watch, mock_command, mock_Profile
+        mock_watch, mock_command, mock_Profile, mock_getLogFlags,
+        mock_is_buildservice_worker, mock_setup_selinux_file_contexts
     ):
+        mock_is_buildservice_worker.return_value = False
+        mock_getLogFlags.return_value = {
+            'run-scripts-in-screen': True
+        }
         mock_copy_deepcopy.return_value = {}
         profile = Mock()
         mock_Profile.return_value = profile
@@ -731,9 +797,55 @@ class TestSystemSetup:
         self.setup.call_disk_script()
         mock_copy_deepcopy.assert_called_once_with(os.environ)
         mock_command.assert_called_once_with(
-            ['chroot', 'root_dir', 'bash', 'image/disk.sh'], {}
+            [
+                'screen', '-t', '-X',
+                'chroot', 'root_dir', 'bash', '/image/disk.sh'
+            ], {}
         )
+        mock_setup_selinux_file_contexts.assert_called_once_with()
 
+    @patch.object(SystemSetup, 'setup_selinux_file_contexts')
+    @patch('kiwi.system.setup.Defaults.is_buildservice_worker')
+    @patch('kiwi.logger.Logger.getLogFlags')
+    @patch('kiwi.system.setup.Profile')
+    @patch('kiwi.command.Command.call')
+    @patch('kiwi.command_process.CommandProcess.poll_and_watch')
+    @patch('os.path.exists')
+    @patch('os.stat')
+    @patch('os.access')
+    @patch('copy.deepcopy')
+    def test_call_pre_disk_script(
+        self, mock_copy_deepcopy, mock_access, mock_stat, mock_os_path,
+        mock_watch, mock_command, mock_Profile, mock_getLogFlags,
+        mock_is_buildservice_worker, mock_setup_selinux_file_contexts
+    ):
+        mock_is_buildservice_worker.return_value = False
+        mock_getLogFlags.return_value = {
+            'run-scripts-in-screen': True
+        }
+        mock_copy_deepcopy.return_value = {}
+        profile = Mock()
+        mock_Profile.return_value = profile
+        profile.get_settings.return_value = {}
+        result_type = namedtuple(
+            'result_type', ['stderr', 'returncode']
+        )
+        mock_result = result_type(stderr='stderr', returncode=0)
+        mock_os_path.return_value = True
+        mock_watch.return_value = mock_result
+        mock_access.return_value = False
+
+        self.setup.call_pre_disk_script()
+        mock_copy_deepcopy.assert_called_once_with(os.environ)
+        mock_command.assert_called_once_with(
+            [
+                'screen', '-t', '-X',
+                'chroot', 'root_dir', 'bash', '/image/pre_disk_sync.sh'
+            ], {}
+        )
+        mock_setup_selinux_file_contexts.assert_called_once_with()
+
+    @patch.object(SystemSetup, 'setup_selinux_file_contexts')
     @patch('kiwi.system.setup.Profile')
     @patch('kiwi.command.Command.call')
     @patch('kiwi.command_process.CommandProcess.poll_and_watch')
@@ -743,7 +855,7 @@ class TestSystemSetup:
     @patch('copy.deepcopy')
     def test_call_image_script(
         self, mock_copy_deepcopy, mock_access, mock_stat, mock_os_path,
-        mock_watch, mock_command, mock_Profile
+        mock_watch, mock_command, mock_Profile, mock_setup_selinux_file_contexts
     ):
         mock_copy_deepcopy.return_value = {}
         profile = Mock()
@@ -760,8 +872,63 @@ class TestSystemSetup:
         self.setup.call_image_script()
         mock_copy_deepcopy.assert_called_once_with(os.environ)
         mock_command.assert_called_once_with(
-            ['chroot', 'root_dir', 'bash', 'image/images.sh'], {}
+            ['chroot', 'root_dir', 'bash', '/image/images.sh'], {}
         )
+        mock_setup_selinux_file_contexts.assert_called_once_with()
+
+    @patch.object(SystemSetup, 'setup_selinux_file_contexts')
+    @patch('kiwi.system.setup.Profile')
+    @patch('kiwi.command.Command.call')
+    @patch('kiwi.command_process.CommandProcess.poll_and_watch')
+    @patch('os.path.exists')
+    @patch('os.stat')
+    @patch('os.access')
+    @patch('copy.deepcopy')
+    def test_call_config_overlay_script(
+        self, mock_copy_deepcopy, mock_access, mock_stat, mock_os_path,
+        mock_watch, mock_command, mock_Profile, mock_setup_selinux_file_contexts
+    ):
+        mock_copy_deepcopy.return_value = {}
+        profile = Mock()
+        mock_Profile.return_value = profile
+        profile.get_settings.return_value = {}
+        result_type = namedtuple(
+            'result_type', ['stderr', 'returncode']
+        )
+        mock_result = result_type(stderr='stderr', returncode=0)
+        mock_os_path.return_value = True
+        mock_watch.return_value = mock_result
+        mock_access.return_value = False
+
+        self.setup.call_config_overlay_script()
+        mock_copy_deepcopy.assert_called_once_with(os.environ)
+        mock_command.assert_called_once_with(
+            ['chroot', 'root_dir', 'bash', '/image/config-overlay.sh'], {}
+        )
+        mock_setup_selinux_file_contexts.assert_called_once_with()
+
+    @patch('kiwi.command.Command.call')
+    @patch('kiwi.command_process.CommandProcess.poll_and_watch')
+    @patch('os.path.exists')
+    @patch('os.path.abspath')
+    def test_call_config_host_overlay_script(
+        self, mock_abspath, mock_exists, mock_watch, mock_command
+    ):
+        result_type = namedtuple(
+            'result_type', ['stderr', 'returncode']
+        )
+        mock_result = result_type(stderr='stderr', returncode=0)
+        mock_exists.return_value = True
+        mock_abspath.return_value = '/root_dir/image/config-host-overlay.sh'
+        mock_watch.return_value = mock_result
+        self.setup.call_config_host_overlay_script()
+        mock_abspath.assert_called_once_with(
+            'root_dir/image/config-host-overlay.sh'
+        )
+        mock_command.assert_called_once_with([
+            'bash', '-c',
+            'cd root_dir && bash --norc /root_dir/image/config-host-overlay.sh '
+        ])
 
     @patch('kiwi.command.Command.call')
     @patch('kiwi.command_process.CommandProcess.poll_and_watch')
@@ -787,13 +954,20 @@ class TestSystemSetup:
             'ext4 1'
         ])
 
+    @patch('kiwi.system.setup.Defaults.is_buildservice_worker')
+    @patch('kiwi.logger.Logger.getLogFlags')
     @patch('kiwi.command.Command.call')
     @patch('kiwi.command_process.CommandProcess.poll_and_watch')
     @patch('os.path.exists')
     @patch('os.path.abspath')
     def test_call_edit_boot_install_script(
-        self, mock_abspath, mock_exists, mock_watch, mock_command
+        self, mock_abspath, mock_exists, mock_watch, mock_command,
+        mock_getLogFlags, mock_is_buildservice_worker
     ):
+        mock_is_buildservice_worker.return_value = False
+        mock_getLogFlags.return_value = {
+            'run-scripts-in-screen': True
+        }
         result_type = namedtuple(
             'result_type', ['stderr', 'returncode']
         )
@@ -807,11 +981,15 @@ class TestSystemSetup:
         mock_abspath.assert_called_once_with(
             'root_dir/image/edit_boot_install.sh'
         )
-        mock_command.assert_called_once_with([
-            'bash', '-c',
-            'cd root_dir && bash --norc /root_dir/image/edit_boot_install.sh '
-            'my_image.raw /dev/mapper/loop0p1'
-        ])
+        mock_command.assert_called_once_with(
+            [
+                'screen', '-t', '-X',
+                'bash', '-c',
+                'cd root_dir && bash --norc '
+                '/root_dir/image/edit_boot_install.sh '
+                'my_image.raw /dev/mapper/loop0p1'
+            ]
+        )
 
     @patch('kiwi.system.setup.Profile')
     @patch('kiwi.command.Command.call')
@@ -870,12 +1048,34 @@ class TestSystemSetup:
 
     @patch('os.path.exists')
     @patch('kiwi.system.setup.Path.wipe')
+    @patch.object(SystemSetup, 'setup_selinux_file_contexts')
+    @patch('kiwi.system.setup.Profile')
+    @patch('kiwi.command.Command.call')
     @patch('kiwi.command.Command.run')
+    @patch('kiwi.command_process.CommandProcess.poll_and_watch')
+    @patch('os.path.exists')
+    @patch('os.stat')
+    @patch('os.access')
+    @patch('copy.deepcopy')
     def test_create_fstab(
-        self, mock_command, mock_wipe, mock_exists
+        self, mock_copy_deepcopy, mock_access, mock_stat, mock_os_path,
+        mock_watch, mock_command_run, mock_command_call, mock_Profile,
+        mock_setup_selinux_file_contexts, mock_wipe, mock_exists
     ):
         fstab = Mock()
         mock_exists.return_value = True
+
+        mock_copy_deepcopy.return_value = {}
+        profile = Mock()
+        mock_Profile.return_value = profile
+        profile.get_settings.return_value = {}
+        result_type = namedtuple(
+            'result_type', ['stderr', 'returncode']
+        )
+        mock_result = result_type(stderr='stderr', returncode=0)
+        mock_os_path.return_value = True
+        mock_watch.return_value = mock_result
+        mock_access.return_value = True
 
         m_open = mock_open(read_data='append_entry')
         with patch('builtins.open', m_open, create=True):
@@ -890,34 +1090,34 @@ class TestSystemSetup:
         assert m_open.return_value.write.call_args_list == [
             call('append_entry')
         ]
-        assert mock_command.call_args_list == [
-            call(['patch', 'root_dir/etc/fstab', 'root_dir/etc/fstab.patch']),
-            call(['chroot', 'root_dir', '/etc/fstab.script'])
-        ]
+        mock_command_run.assert_called_once_with(
+            ['patch', 'root_dir/etc/fstab', 'root_dir/etc/fstab.patch']
+        )
+        mock_command_call.assert_called_once_with(
+            ['chroot', 'root_dir', '/etc/fstab.script'], {}
+        )
         assert mock_wipe.call_args_list == [
             call('root_dir/etc/fstab.append'),
             call('root_dir/etc/fstab.patch'),
             call('root_dir/etc/fstab.script')
         ]
+        mock_setup_selinux_file_contexts.assert_called_once_with()
 
     @patch('kiwi.command.Command.run')
-    @patch('kiwi.system.setup.NamedTemporaryFile')
+    @patch('pathlib.Path.touch')
     @patch('kiwi.system.setup.ArchiveTar')
     @patch('kiwi.system.setup.Compress')
     @patch('os.path.getsize')
     @patch('kiwi.system.setup.Path.wipe')
     def test_create_recovery_archive(
         self, mock_wipe, mock_getsize, mock_compress,
-        mock_archive, mock_temp, mock_command
+        mock_archive, mock_pathlib_Path_touch, mock_command
     ):
         mock_getsize.return_value = 42
         compress = Mock()
         mock_compress.return_value = compress
         archive = Mock()
         mock_archive.return_value = archive
-        tmpdir = Mock()
-        tmpdir.name = 'tmpdir'
-        mock_temp.return_value = tmpdir
         self.setup.oemconfig['recovery'] = True
         self.setup.oemconfig['recovery_inplace'] = True
 
@@ -929,7 +1129,7 @@ class TestSystemSetup:
             ['bash', '-c', 'rm -f root_dir/recovery.*']
         )
         mock_archive.assert_called_once_with(
-            create_from_file_list=False, filename='tmpdir'
+            create_from_file_list=False, filename='root_dir/recovery.tar'
         )
         archive.create.assert_called_once_with(
             exclude=['dev', 'proc', 'sys'],
@@ -940,14 +1140,12 @@ class TestSystemSetup:
             ],
             source_dir='root_dir'
         )
-        assert mock_command.call_args_list[1] == call(
-            ['mv', 'tmpdir', 'root_dir/recovery.tar']
-        )
         assert m_open.call_args_list[0] == call(
             'root_dir/recovery.tar.filesystem', 'w'
         )
         assert m_open.return_value.write.call_args_list[0] == call('ext3')
-        assert mock_command.call_args_list[2] == call(
+
+        assert mock_command.call_args_list[1] == call(
             ['bash', '-c', 'tar -tf root_dir/recovery.tar | wc -l']
         )
         assert m_open.call_args_list[1] == call(
@@ -1062,17 +1260,40 @@ class TestSystemSetup:
 
     @patch('kiwi.system.setup.os.path.exists')
     def test_setup_machine_id(self, mock_path_exists):
-        mock_path_exists.return_value = True
-
+        # No /etc/machine-id -> no creation
+        mock_path_exists.return_value = False
         with patch('builtins.open') as m_open:
             self.setup.setup_machine_id()
+            m_open.assert_not_called()
+
+        mock_path_exists.return_value = True
+
+        # Empty /etc/machine-id -> truncate
+        m_open = mock_open(read_data='')
+        with patch('builtins.open', m_open):
+            self.setup.setup_machine_id()
             m_open.assert_called_once_with(
-                'root_dir/etc/machine-id', 'w'
+                'root_dir/etc/machine-id', 'r+'
             )
+            m_open().truncate.assert_called_once_with(0)
 
-        mock_path_exists.return_value = False
+        # Filled /etc/machine-id -> truncate
+        m_open = mock_open(read_data='9d75e31cca5943b3a527345e0684d5b6')
+        with patch('builtins.open', m_open):
+            self.setup.setup_machine_id()
+            m_open.assert_called_once_with(
+                'root_dir/etc/machine-id', 'r+'
+            )
+            m_open().truncate.assert_called_once_with(0)
 
-        self.setup.setup_machine_id()
+        # Explicitly uninitialized /etc/machine-id -> keep
+        m_open = mock_open(read_data='uninitialized')
+        with patch('builtins.open', m_open):
+            self.setup.setup_machine_id()
+            m_open.assert_called_once_with(
+                'root_dir/etc/machine-id', 'r+'
+            )
+            m_open().truncate.assert_not_called()
 
     @patch('kiwi.system.setup.Command.run')
     @patch('kiwi.system.setup.Path.which')
@@ -1280,15 +1501,77 @@ class TestSystemSetup:
             raise_on_error=False
         )
 
+    @patch('kiwi.system.setup.CommandCapabilities.has_option_in_help')
     @patch('kiwi.system.setup.Command.run')
-    def test_set_selinux_file_contexts(self, mock_command):
+    @patch('os.scandir')
+    def test_set_selinux_file_contexts_new_version(
+        self, mock_os_scandir, mock_command, mock_has_option_in_help
+    ):
+        mock_has_option_in_help.return_value = False
+        mock_os_scandir.return_value = self.selinux_policies
         self.setup.set_selinux_file_contexts('security_context_file')
         mock_command.assert_called_once_with(
             [
                 'chroot', 'root_dir',
-                'setfiles', 'security_context_file', '/', '-v'
+                'setfiles', '-F', '-p',
+                '-c', '/etc/selinux/targeted/policy/policy.some_policy',
+                '-e', '/proc', '-e', '/sys', '-e', '/dev',
+                'security_context_file', '/'
             ]
         )
+
+    @patch('kiwi.system.setup.CommandCapabilities.has_option_in_help')
+    @patch('kiwi.system.setup.Command.run')
+    @patch('os.scandir')
+    def test_set_selinux_file_contexts_old_version(
+        self, mock_os_scandir, mock_command, mock_has_option_in_help
+    ):
+        mock_has_option_in_help.return_value = True
+        mock_os_scandir.return_value = self.selinux_policies
+        self.setup.set_selinux_file_contexts('security_context_file')
+        assert mock_command.call_args_list == [
+            call(
+                [
+                    'chroot', 'root_dir', 'setfiles', '-c',
+                    '/etc/selinux/targeted/policy/policy.some_policy',
+                    'security_context_file'
+                ]
+            ),
+            call(
+                [
+                    'chroot', 'root_dir', 'setfiles', '-F', '-p',
+                    '-e', '/proc', '-e', '/sys', '-e', '/dev',
+                    'security_context_file', '/'
+                ]
+            )
+        ]
+
+    @patch('kiwi.system.setup.Command.run')
+    @patch('os.scandir')
+    def test_set_selinux_file_contexts_raises(
+        self, mock_os_scandir, mock_command
+    ):
+        mock_os_scandir.side_effect = Exception
+        with raises(KiwiFileNotFound):
+            self.setup.set_selinux_file_contexts('security_context_file')
+
+    @patch('os.path.exists')
+    @patch.object(SystemSetup, 'set_selinux_file_contexts')
+    @patch('kiwi.system.setup.Path.which')
+    def test_setup_selinux_file_contexts(
+        self, mock_Path_which, mock_set_selinux_file_contexts,
+        mock_os_path_exists
+    ):
+        mock_os_path_exists.return_value = True
+        mock_Path_which.return_value = 'setfiles'
+        self.setup.setup_selinux_file_contexts()
+        mock_set_selinux_file_contexts.assert_called_once_with(
+            '/etc/selinux/targeted/contexts/files/file_contexts'
+        )
+        mock_Path_which.return_value = None
+        with self._caplog.at_level(logging.WARNING):
+            self.setup.setup_selinux_file_contexts()
+            assert 'setfiles tool not installed' in self._caplog.text
 
     @patch('kiwi.system.setup.Repository.new')
     @patch('kiwi.system.setup.Uri')
@@ -1312,7 +1595,7 @@ class TestSystemSetup:
         self.setup_with_real_xml.import_repositories_marked_as_imageinclude()
         assert repo.add_repo.call_args_list[0] == call(
             'uri-alias', 'uri', 'rpm-md', None, None, None, None, None,
-            'kiwiRepoCredentials', None, None, None
+            'kiwiRepoCredentials', None, None, None, False, '../data/script'
         )
 
     @patch('os.path.exists')

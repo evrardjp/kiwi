@@ -19,8 +19,9 @@ tools:
 	${MAKE} -C tools all
 
 install_dracut:
-	install -d -m 755 ${buildroot}usr/lib/dracut/modules.d
-	cp -a dracut/modules.d/* ${buildroot}usr/lib/dracut/modules.d
+	for dracut in dracut/modules.d/*; do \
+		${MAKE} -C $$dracut install ;\
+	done
 
 install_package_docs:
 	install -d -m 755 ${buildroot}${docdir}/python-kiwi
@@ -50,7 +51,7 @@ install:
 	install -m 644 kiwi.yml ${buildroot}etc/kiwi.yml
 
 tox:
-	tox "-n 5"
+	tox -- "-n 5"
 
 kiwi/schema/kiwi.rng: kiwi/schema/kiwi.rnc
 	# whenever the schema is changed this target will convert
@@ -116,7 +117,7 @@ build: clean tox
 	gzip dist/python-kiwi.tar
 	rm -rf kiwi-${version}
 	# update rpm changelog using reference file
-	helper/update_changelog.py --since package/python-kiwi.changes > \
+	helper/update_changelog.py --since package/python-kiwi.changes --fix > \
 		dist/python-kiwi.changes
 	helper/update_changelog.py --file package/python-kiwi.changes >> \
 		dist/python-kiwi.changes

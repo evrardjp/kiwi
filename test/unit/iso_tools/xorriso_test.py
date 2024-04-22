@@ -4,13 +4,16 @@ from pytest import raises
 from kiwi.defaults import Defaults
 from kiwi.iso_tools.xorriso import IsoToolsXorrIso
 
-from kiwi.exceptions import KiwiIsoToolError
+from kiwi.exceptions import KiwiFileNotFound, KiwiIsoToolError
 
 
 class TestIsoToolsXorrIso:
     def setup(self):
         Defaults.set_platform_name('x86_64')
         self.iso_tool = IsoToolsXorrIso('source-dir')
+
+    def setup_method(self, cls):
+        self.setup()
 
     @patch('kiwi.iso_tools.xorriso.Path.which')
     def test_get_tool_name(self, mock_which):
@@ -22,6 +25,19 @@ class TestIsoToolsXorrIso:
         mock_exists.return_value = False
         with raises(KiwiIsoToolError):
             self.iso_tool.get_tool_name()
+
+    @patch('kiwi.iso_tools.xorriso.Path.which')
+    def test_init_iso_creation_parameters_isolinux_fail_on_isohdpfx_not_found(self, mock_which):
+        mock_which.return_value = None
+        with raises(KiwiFileNotFound):
+            self.iso_tool.init_iso_creation_parameters(
+                {
+                    'mbr_id': 'app_id',
+                    'publisher': 'org',
+                    'preparer': 'preparer',
+                    'volume_id': 'vol_id'
+                }
+            )
 
     @patch('kiwi.iso_tools.xorriso.Path.which')
     def test_init_iso_creation_parameters_isolinux(self, mock_which):
@@ -65,7 +81,9 @@ class TestIsoToolsXorrIso:
             '-boot_image', 'any', 'load_size=2048'
         ]
 
-    def test_init_iso_creation_parameters_efi(self):
+    @patch('os.path.exists')
+    def test_init_iso_creation_parameters_efi(self, mock_os_path_exists):
+        mock_os_path_exists.return_value = True
         self.iso_tool.init_iso_creation_parameters(
             {
                 'mbr_id': 'app_id',
@@ -98,12 +116,10 @@ class TestIsoToolsXorrIso:
             '-boot_image', 'any', 'load_size=2048'
         ]
 
-    @patch('os.path.exists')
-    def test_add_efi_loader_parameters(self, mock_exists):
-        mock_exists.return_value = True
-        self.iso_tool.add_efi_loader_parameters()
+    def test_add_efi_loader_parameters(self):
+        self.iso_tool.add_efi_loader_parameters('target_dir/efi-loader')
         assert self.iso_tool.iso_loaders == [
-            '-append_partition', '2', '0xef', 'source-dir/boot/x86_64/efi',
+            '-append_partition', '2', '0xef', 'target_dir/efi-loader',
             '-boot_image', 'any', 'next',
             '-boot_image', 'any',
             'efi_path=--interval:appended_partition_2:all::',

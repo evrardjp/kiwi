@@ -1,3 +1,5 @@
+#!/bin/bash
+
 type getarg >/dev/null 2>&1 || . /lib/dracut-lib.sh
 
 function setup_debug {
@@ -165,5 +167,51 @@ function bool {
         echo "true"
     else
         echo "false"
+    fi
+}
+
+function initialize {
+    # """
+    # Source profile variables into runtime environment
+    # The method will exit from the initrd if the profile
+    # file does not exist
+    # """
+    local term
+    local kiwi_oem_installdevice
+    local profile=/.profile
+    local profile_extra=/.profile.extra
+
+    # Read and import mandatory image profile to env
+    test -f ${profile} || \
+        report_and_quit "No profile setup found"
+    import_file ${profile}
+
+    # Optional env TERM setup
+    term=$(getarg "rd.kiwi.term=")
+    [ -n "${term}" ] && export TERM="${term}"
+
+    # Source optional profile.extra to env
+    test -f ${profile_extra} && source ${profile_extra}
+
+    # Create dialog profile from current env
+    # Used in the systemd dialog unit
+    env >/dialog_profile
+
+    # Handle kiwi specific env overwrites
+    kiwi_oem_installdevice=$(getarg rd.kiwi.oem.installdevice=)
+    if [ -n "${kiwi_oem_installdevice}" ];then
+        # activate unattended mode. In case a user explicitly
+        # provides the device name to deploy the image to via
+        # the kernel commandline, no further questions if this
+        # is wanted should appear
+        message="rd.kiwi.oem.installdevice explicitly set via cmdline."
+        message="${message} The following OEM device settings will be ignored:"
+        message="${message} oem-unattended,"
+        message="${message} oem-unattended-id,"
+        message="${message} oem-device-filter"
+        export kiwi_oemunattended="true"
+        export kiwi_oemunattended_id=""
+        export kiwi_oemdevicefilter=""
+        info "${message}" >&2
     fi
 }

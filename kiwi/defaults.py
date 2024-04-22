@@ -35,20 +35,12 @@ from kiwi.version import (
 
 from kiwi.exceptions import KiwiBootLoaderGrubDataError
 
-# Default module variables
-POST_DISK_SYNC_SCRIPT = 'disk.sh'
-POST_BOOTSTRAP_SCRIPT = 'post_bootstrap.sh'
-POST_PREPARE_SCRIPT = 'config.sh'
-PRE_CREATE_SCRIPT = 'images.sh'
-EDIT_BOOT_CONFIG_SCRIPT = 'edit_boot_config.sh'
-EDIT_BOOT_INSTALL_SCRIPT = 'edit_boot_install.sh'
-IMAGE_METADATA_DIR = 'image'
-ROOT_VOLUME_NAME = 'LVRoot'
-SHARED_CACHE_DIR = '/var/cache/kiwi'
-CUSTOM_RUNTIME_CONFIG_FILE = None
-PLATFORM_MACHINE = platform.machine()
-
-log = logging.getLogger('kiwi')
+shim_loader_type = NamedTuple(
+    'shim_loader_type', [
+        ('filename', str),
+        ('binaryname', str)
+    ]
+)
 
 grub_loader_type = NamedTuple(
     'grub_loader_type', [
@@ -56,6 +48,46 @@ grub_loader_type = NamedTuple(
         ('binaryname', str)
     ]
 )
+
+unit_type = NamedTuple(
+    'unit_type', [
+        ('byte', str),
+        ('kb', str),
+        ('mb', str),
+        ('gb', str)
+    ]
+)
+
+
+# Default module variables
+DM_METADATA_FORMAT_VERSION = '1'
+DM_METADATA_OFFSET = 4096  # 4kb
+VERITY_DATA_BLOCKSIZE = 4096  # 4kb
+VERITY_HASH_BLOCKSIZE = 4096  # 4kb
+INTEGRITY_SECTOR_SIZE = 512
+
+INTEGRITY_ALGORITHM = 'sha256'
+INTEGRITY_KEY_ALGORITHM = 'hmac-sha256'
+
+UNIT = unit_type(byte='b', kb='k', mb='m', gb='g')
+POST_DISK_SYNC_SCRIPT = 'disk.sh'
+PRE_DISK_SYNC_SCRIPT = 'pre_disk_sync.sh'
+POST_BOOTSTRAP_SCRIPT = 'post_bootstrap.sh'
+POST_PREPARE_SCRIPT = 'config.sh'
+POST_PREPARE_OVERLAY_SCRIPT = 'config-overlay.sh'
+POST_HOST_PREPARE_OVERLAY_SCRIPT = 'config-host-overlay.sh'
+PRE_CREATE_SCRIPT = 'images.sh'
+EDIT_BOOT_CONFIG_SCRIPT = 'edit_boot_config.sh'
+EDIT_BOOT_INSTALL_SCRIPT = 'edit_boot_install.sh'
+IMAGE_METADATA_DIR = 'image'
+ROOT_VOLUME_NAME = 'LVRoot'
+SHARED_CACHE_DIR = '/var/cache/kiwi'
+TEMP_DIR = '/var/tmp'
+CUSTOM_RUNTIME_CONFIG_FILE = None
+PLATFORM_MACHINE = platform.machine()
+EFI_FAT_IMAGE_SIZE = 20
+
+log = logging.getLogger('kiwi')
 
 
 class Defaults:
@@ -253,6 +285,16 @@ class Defaults:
         CUSTOM_RUNTIME_CONFIG_FILE = filename
 
     @staticmethod
+    def set_temp_location(location):
+        """
+        Sets the temp directory location once
+
+        :param str location: a location path
+        """
+        global TEMP_DIR
+        TEMP_DIR = location
+
+    @staticmethod
     def get_shared_cache_location():
         """
         Provides the shared cache location
@@ -272,6 +314,22 @@ class Defaults:
         )).lstrip(os.sep)
 
     @staticmethod
+    def get_temp_location():
+        """
+        Provides the base temp directory location
+
+        This is the directory used to store any temporary files
+        and directories created by kiwi during runtime
+
+        :return: directory path
+
+        :rtype: str
+        """
+        return os.path.abspath(
+            os.path.normpath(TEMP_DIR)
+        )
+
+    @staticmethod
     def get_sync_options():
         """
         Provides list of default data sync options
@@ -280,10 +338,37 @@ class Defaults:
 
         :rtype: list
         """
-        return ['-a', '-H', '-X', '-A', '--one-file-system', '--inplace']
+        return [
+            '--archive', '--hard-links', '--xattrs', '--acls',
+            '--one-file-system', '--inplace'
+        ]
 
     @staticmethod
-    def get_exclude_list_for_root_data_sync():
+    def get_removed_files_name():
+        """
+        Provides base file name to store removed files
+        in a delta root build
+        """
+        return 'removed'
+
+    @staticmethod
+    def get_exclude_list_for_removed_files_detection() -> List[str]:
+        """
+        Provides list of files/dirs to exclude from the removed
+        files detection in a delta root build
+        """
+        return [
+            'etc/hosts.kiwi',
+            'etc/hosts.sha',
+            'etc/resolv.conf.kiwi',
+            'etc/resolv.conf.sha',
+            'etc/sysconfig/proxy.kiwi',
+            'etc/sysconfig/proxy.sha',
+            'usr/lib/sysimage/rpm'
+        ]
+
+    @staticmethod
+    def get_exclude_list_for_root_data_sync(no_tmpdirs: bool = True):
         """
         Provides the list of files or folders that are created
         by KIWI for its own purposes. Those files should be not
@@ -294,7 +379,11 @@ class Defaults:
         :rtype: list
         """
         exclude_list = [
-            'image', '.profile', '.kconfig', 'run/*', 'tmp/*',
+            'image', '.profile', '.kconfig'
+        ]
+        if no_tmpdirs:
+            exclude_list += ['run/*', 'tmp/*']
+        exclude_list += [
             Defaults.get_buildservice_env_name(),
             Defaults.get_shared_cache_location()
         ]
@@ -436,15 +525,26 @@ class Defaults:
         return 'INSTALL'
 
     @staticmethod
-    def get_snapper_config_template_file():
+    def get_snapper_config_template_file(root: str) -> str:
         """
-        Provides the default configuration template file for snapper
+        Provides the default configuration template file for snapper.
+        The location in etc/ are preferred over files in usr/
 
-        :return: file
+        :return: file path
 
         :rtype: str
         """
-        return '/etc/snapper/config-templates/default'
+        snapper_templates = [
+            'etc/snapper/config-templates/default',
+            'usr/share/snapper/config-templates/default'
+        ]
+        snapper_default_conf = ''
+        for snapper_template in snapper_templates:
+            template_config = os.path.join(root, snapper_template)
+            if os.path.exists(template_config):
+                snapper_default_conf = template_config
+                break
+        return snapper_default_conf
 
     @staticmethod
     def get_default_video_mode():
@@ -527,6 +627,7 @@ class Defaults:
             'all_video',
             'xfs',
             'btrfs',
+            'squash4',
             'lvm',
             'luks',
             'gcry_rijndael',
@@ -686,7 +787,7 @@ class Defaults:
         return 'SUSE LINUX GmbH'
 
     @staticmethod
-    def get_shim_loader(root_path):
+    def get_shim_loader(root_path: str) -> Optional[shim_loader_type]:
         """
         Provides shim loader file path
 
@@ -695,19 +796,60 @@ class Defaults:
 
         :param string root_path: image root path
 
+        :return: shim_loader_type | None
+
+        :rtype: NamedTuple
+        """
+
+        shim_pattern_type = namedtuple(
+            'shim_pattern_type', ['pattern', 'binaryname']
+        )
+
+        shim_file_patterns = [
+            shim_pattern_type('/usr/lib/shim/shim*.efi.signed.latest', 'shimx64.efi'),
+            shim_pattern_type('/usr/lib/shim/shim*.efi.signed', 'shimx64.efi'),
+            shim_pattern_type('/usr/share/efi/*/shim.efi', None),
+            shim_pattern_type('/usr/lib64/efi/shim.efi', None),
+            shim_pattern_type('/boot/efi/EFI/*/shim[a-z]*.efi', None),
+            shim_pattern_type('/boot/efi/EFI/*/shim.efi', None),
+            shim_pattern_type('/usr/lib/shim/shim*.efi', None)
+        ]
+        for shim_file_pattern in shim_file_patterns:
+            for shim_file in sorted(glob.iglob(root_path + shim_file_pattern.pattern), key=len):
+                if not shim_file_pattern.binaryname:
+                    binaryname = os.path.basename(shim_file)
+                else:
+                    binaryname = shim_file_pattern.binaryname
+                return shim_loader_type(
+                    shim_file, binaryname
+                )
+
+        return None
+
+    @staticmethod
+    def get_mok_manager(root_path: str) -> Optional[str]:
+        """
+        Provides Mok Manager file path
+
+        Searches distribution specific locations to find
+        the Mok Manager EFI binary
+
+        :param str root_path: image root path
+
         :return: file path or None
 
         :rtype: str
         """
-        shim_file_patterns = [
-            '/usr/share/efi/*/shim.efi',
-            '/usr/lib64/efi/shim.efi',
-            '/boot/efi/EFI/*/shim*.efi',
-            '/usr/lib/shim/shim*.efi'
+        mok_manager_file_patterns = [
+            '/usr/share/efi/*/MokManager.efi',
+            '/usr/lib64/efi/MokManager.efi',
+            '/boot/efi/EFI/*/mm*.efi',
+            '/usr/lib/shim/mm*.efi'
         ]
-        for shim_file_pattern in shim_file_patterns:
-            for shim_file in glob.iglob(root_path + shim_file_pattern):
-                return shim_file
+        for mok_manager_file_pattern in mok_manager_file_patterns:
+            for mm_file in glob.iglob(root_path + mok_manager_file_pattern):
+                return mm_file
+        return None
 
     @staticmethod
     def get_grub_efi_font_directory(root_path):
@@ -728,12 +870,14 @@ class Defaults:
                 return font_dir
 
     @staticmethod
-    def get_unsigned_grub_loader(root_path):
+    def get_unsigned_grub_loader(
+        root_path: str, target_type: str = 'disk'
+    ) -> Optional[str]:
         """
         Provides unsigned grub efi loader file path
 
-        Searches distribution specific locations to find grub.efi
-        below the given root path
+        Searches distribution specific locations to find a distro
+        grub EFI binary within the given root path
 
         :param string root_path: image root path
 
@@ -741,16 +885,28 @@ class Defaults:
 
         :rtype: str
         """
-        unsigned_grub_file_patterns = [
-            '/usr/share/grub*/*-efi/grub.efi',
-            '/usr/lib/grub*/*-efi/grub.efi',
-            '/boot/efi/EFI/*/grubx64.efi'
-        ]
-        for unsigned_grub_file_pattern in unsigned_grub_file_patterns:
+        unsigned_grub_file = None
+        unsigned_grub_file_patterns = {
+            'disk': [
+                '/usr/share/grub*/*-efi/grub.efi',
+                '/usr/lib/grub*/*-efi/grub.efi',
+                '/boot/efi/EFI/*/grubx64.efi',
+                '/boot/efi/EFI/*/grubaa64.efi'
+            ],
+            'iso': [
+                '/boot/efi/EFI/*/gcdx64.efi',
+                '/usr/share/grub*/*-efi/grub.efi',
+                '/usr/lib/grub*/*-efi/grub.efi',
+                '/boot/efi/EFI/*/grubx64.efi',
+                '/boot/efi/EFI/*/grubaa64.efi'
+            ]
+        }
+        for unsigned_grub_file_pattern in unsigned_grub_file_patterns[target_type]:
             for unsigned_grub_file in glob.iglob(
                 root_path + unsigned_grub_file_pattern
             ):
                 return unsigned_grub_file
+        return None
 
     @staticmethod
     def get_grub_bios_core_loader(root_path):
@@ -833,12 +989,14 @@ class Defaults:
         return 'eltorito.img'
 
     @staticmethod
-    def get_signed_grub_loader(root_path: str) -> Optional[grub_loader_type]:
+    def get_signed_grub_loader(
+        root_path: str, target_type: str = 'disk'
+    ) -> Optional[grub_loader_type]:
         """
         Provides shim signed grub loader file path
 
-        Searches distribution specific locations to find grub.efi
-        below the given root path
+        Searches distribution specific locations to find a grub
+        EFI binary within the given root path
 
         :param str root_path: image root path
 
@@ -849,25 +1007,54 @@ class Defaults:
         grub_pattern_type = namedtuple(
             'grub_pattern_type', ['pattern', 'binaryname']
         )
-        signed_grub_file_patterns = [
-            grub_pattern_type(
-                '/usr/share/efi/*/grub.efi', None
-            ),
-            grub_pattern_type(
-                '/usr/lib64/efi/grub.efi', None
-            ),
-            grub_pattern_type(
-                '/boot/efi/EFI/*/grub*.efi', None
-            ),
-            grub_pattern_type(
-                '/usr/share/grub*/*-efi/grub.efi', None
-            ),
-            grub_pattern_type(
-                '/usr/lib/grub/x86_64-efi-signed/grubx64.efi.signed',
-                'grubx64.efi'
-            )
-        ]
-        for signed_grub in signed_grub_file_patterns:
+        signed_grub_file_patterns = {
+            'disk': [
+                grub_pattern_type(
+                    '/usr/share/efi/*/grub.efi', None
+                ),
+                grub_pattern_type(
+                    '/usr/lib64/efi/grub.efi', None
+                ),
+                grub_pattern_type(
+                    '/boot/efi/EFI/*/grub*.efi', None
+                ),
+                grub_pattern_type(
+                    '/usr/share/grub*/*-efi/grub.efi', None
+                ),
+                grub_pattern_type(
+                    '/usr/lib/grub/x86_64-efi-signed/grubx64.efi.signed',
+                    'grubx64.efi'
+                )
+            ],
+            'iso': [
+                grub_pattern_type(
+                    '/boot/efi/EFI/*/gcdx64.efi',
+                    'grubx64.efi'
+                ),
+                grub_pattern_type(
+                    '/boot/efi/EFI/*/gcdaa64.efi',
+                    'grubaa64.efi'
+                ),
+                grub_pattern_type(
+                    '/usr/share/efi/*/grub.efi', None
+                ),
+                grub_pattern_type(
+                    '/usr/lib64/efi/grub.efi', None
+                ),
+                grub_pattern_type(
+                    '/boot/efi/EFI/*/grub*.efi', None
+                ),
+                grub_pattern_type(
+                    '/usr/share/grub*/*-efi/grub.efi', None
+                ),
+                grub_pattern_type(
+                    '/usr/lib/grub/x86_64-efi-signed/grubx64.efi.signed',
+                    'grubx64.efi'
+                )
+
+            ]
+        }
+        for signed_grub in signed_grub_file_patterns[target_type]:
             for signed_grub_file in glob.iglob(root_path + signed_grub.pattern):
                 if not signed_grub.binaryname:
                     binaryname = os.path.basename(signed_grub_file)
@@ -1083,6 +1270,7 @@ class Defaults:
             'armv6l': ['efi', 'uefi'],
             'armv7hl': ['efi', 'uefi'],
             'armv7l': ['efi', 'uefi'],
+            'armv8l': ['efi', 'uefi'],
             'ppc': ['ofw'],
             'ppc64': ['ofw', 'opal'],
             'ppc64le': ['ofw', 'opal'],
@@ -1111,12 +1299,14 @@ class Defaults:
             'ppc64': 'ofw',
             'ppc64le': 'ofw',
             'arm64': 'efi',
+            'aarch64': 'efi',
             'armv5el': 'efi',
             'armv5tel': 'efi',
             'armv6hl': 'efi',
             'armv6l': 'efi',
             'armv7hl': 'efi',
             'armv7l': 'efi',
+            'armv8l': 'efi',
             'riscv64': 'efi'
         }
         if arch in default_firmware:
@@ -1174,6 +1364,7 @@ class Defaults:
             'armv5tel': 'arm-efi',
             'armv6l': 'arm-efi',
             'armv7l': 'arm-efi',
+            'armv8l': 'arm-efi',
             'riscv64': 'riscv64-efi'
         }
         if arch in default_module_directory_names:
@@ -1209,6 +1400,7 @@ class Defaults:
             'armv5tel': 'bootarm.efi',
             'armv6l': 'bootarm.efi',
             'armv7l': 'bootarm.efi',
+            'armv8l': 'bootarm.efi',
             'riscv64': 'bootriscv64.efi'
         }
         if arch in default_efi_image_names:
@@ -1280,7 +1472,7 @@ class Defaults:
 
         :rtype: list
         """
-        return ['tbz']
+        return ['tbz', 'cpio']
 
     @staticmethod
     def get_container_image_types():
@@ -1548,13 +1740,13 @@ class Defaults:
     @staticmethod
     def get_container_compression():
         """
-        Provides default container compression algorithm
+        Provides default container compression
 
-        :return: name
+        :return: True
 
-        :rtype: str
+        :rtype: bool
         """
-        return 'xz'
+        return True
 
     @staticmethod
     def get_default_container_name():
@@ -1589,6 +1781,20 @@ class Defaults:
         :rtype: str
         """
         return 'umoci'
+
+    @staticmethod
+    def get_part_mapper_tool():
+        """
+        Provides the default partition mapper tool name.
+
+        :return: name
+
+        :rtype: str
+        """
+        host_architecture = Defaults.get_platform_name()
+        if 's390' in host_architecture:
+            return 'kpartx'
+        return 'partx'
 
     @staticmethod
     def get_default_container_tag():
@@ -1668,7 +1874,7 @@ class Defaults:
 
         :rtype: str
         """
-        return 'dnf'
+        return 'dnf4'
 
     @staticmethod
     def get_default_packager_tool(package_manager):
@@ -1681,7 +1887,7 @@ class Defaults:
 
         :rtype: str
         """
-        rpm_based = ['zypper', 'dnf', 'microdnf']
+        rpm_based = ['zypper', 'dnf4', 'dnf5', 'microdnf']
         deb_based = ['apt']
         if package_manager in rpm_based:
             return 'rpm'

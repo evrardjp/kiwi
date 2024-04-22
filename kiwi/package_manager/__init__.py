@@ -50,11 +50,13 @@ class PackageManager(metaclass=ABCMeta):
     @staticmethod
     def new(
         repository: object, package_manager_name: str,
-        custom_args: List=None  # noqa: E252
+        custom_args: List = [], release_version: str = ''
     ):
         name_map = {
             'zypper': ['zypper', 'Zypper'],
             'dnf': ['dnf', 'Dnf'],
+            'dnf5': ['dnf5', 'Dnf5'],
+            'dnf4': ['dnf4', 'Dnf4'],
             'microdnf': ['microdnf', 'MicroDnf'],
             'pacman': ['pacman', 'Pacman'],
             'apt': ['apt', 'Apt']
@@ -66,7 +68,7 @@ class PackageManager(metaclass=ABCMeta):
             )
             module_name = 'PackageManager{0}'.format(module_name)
             manager = package_manager.__dict__[module_name](
-                repository, custom_args
+                repository, custom_args, release_version
             )
         except Exception as issue:
             raise KiwiPackageManagerSetupError(

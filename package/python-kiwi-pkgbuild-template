@@ -21,7 +21,7 @@ build() {
 }
 
 package_python-kiwi(){
-  depends=(python-docopt python-future python-lxml python-requests python-setuptools python-six python-pyxattr python-yaml grub qemu squashfs-tools gptfdisk pacman e2fsprogs xfsprogs btrfs-progs libisoburn lvm2 mtools parted multipath-tools rsync tar shadow kiwi-man-pages)
+  depends=(python-docopt python-simplejson python-lxml python-requests python-setuptools python-yaml grub qemu squashfs-tools gptfdisk pacman e2fsprogs xfsprogs btrfs-progs libisoburn lvm2 mtools parted multipath-tools rsync tar shadow screen kiwi-man-pages)
   optdepends=('gnupg: keyring creation for APT package manager')
   cd kiwi-${pkgver}
   python setup.py install --root="${pkgdir}/" --optimize=1 --skip-build
@@ -35,7 +35,7 @@ package_kiwi-man-pages(){
 }
 
 package_dracut-kiwi-lib(){
-  depends=(cryptsetup btrfs-progs gptfdisk coreutils e2fsprogs grep lvm2 mdadm parted util-linux xfsprogs dialog curl xz device-mapper dracut)
+  depends=(cryptsetup btrfs-progs gptfdisk coreutils e2fsprogs grep lvm2 mdadm parted util-linux xfsprogs dialog curl xz device-mapper dracut pv bc)
   cd kiwi-${pkgver}
   install -d -m 755 ${pkgdir}/usr/lib/dracut/modules.d/99kiwi-lib
   cp -a dracut/modules.d/99kiwi-lib ${pkgdir}/usr/lib/dracut/modules.d/
@@ -49,10 +49,11 @@ package_dracut-kiwi-oem-repart(){
 }
 
 package_dracut-kiwi-oem-dump(){
-  depends=(dracut-kiwi-lib=${pkgver} multipath-tools)
+  depends=(dracut-kiwi-lib=${pkgver} multipath-tools kexec-tools)
   cd kiwi-${pkgver}
   install -d -m 755 ${pkgdir}/usr/lib/dracut/modules.d/90kiwi-dump
   cp -a dracut/modules.d/90kiwi-dump ${pkgdir}/usr/lib/dracut/modules.d/
+  cp -a dracut/modules.d/99kiwi-dump-reboot ${pkgdir}/usr/lib/dracut/modules.d/
 }
 
 package_dracut-kiwi-live(){

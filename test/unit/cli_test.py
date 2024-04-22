@@ -33,19 +33,25 @@ class TestCli:
             'system': True,
             '-h': False,
             '--logfile': None,
+            '--logsocket': None,
+            '--loglevel': None,
             '--color-output': False,
             '<legacy_args>': [],
             '--version': False,
             '--debug': False,
+            '--debug-run-scripts-in-screen': False,
             'result': False,
             '--profile': [],
             '--shared-cache-dir': '/var/cache/kiwi',
+            '--temp-dir': '/var/tmp',
             '--target-arch': None,
             '--help': False,
-            '--config': 'config-file'
+            '--config': 'config-file',
+            '--kiwi-file': None
         }
         self.command_args = {
             '--add-repo': [],
+            '--add-repo-credentials': [],
             '--allow-existing-root': False,
             '--description': 'description',
             '--help': False,
@@ -54,6 +60,7 @@ class TestCli:
             '--clear-cache': False,
             '--root': 'directory',
             '--set-repo': None,
+            '--set-repo-credentials': None,
             '--add-package': [],
             '--add-bootstrap-package': [],
             '--delete-package': [],
@@ -69,8 +76,14 @@ class TestCli:
         self.cli = Cli()
         self.loaded_command = self.cli.load_command()
 
+    def setup_method(self, cls):
+        self.setup()
+
     def teardown(self):
         sys.argv = argv_kiwi_tests
+
+    def teardown_method(self, cls):
+        self.teardown()
 
     @patch('kiwi.cli.Help.show')
     def test_show_and_exit_on_help_request(self, help_show):
@@ -153,18 +166,6 @@ class TestCli:
 
     def test_get_command_args(self):
         assert self.cli.get_command_args() == self.command_args
-
-    def test_get_global_args(self):
-        self.cli.all_args['--config'] = 'config-file'
-        sys.argv = [
-            sys.argv[0],
-            '--config', 'config-file',
-            'system', 'build',
-            '--description', 'description',
-            '--target-dir', 'directory'
-        ]
-        cli = Cli()
-        assert cli.get_global_args() == self.expected_global_args
 
     def test_load_command(self):
         assert self.cli.load_command() == self.loaded_command

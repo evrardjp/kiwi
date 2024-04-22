@@ -20,6 +20,9 @@ class TestDataOutput:
         )
         self.out = DataOutput(test_data)
 
+    def setup_method(self, cls):
+        self.setup()
+
     @patch('sys.stdout')
     def test_display(self, mock_stdout):
         self.out.display()
@@ -35,7 +38,7 @@ class TestDataOutput:
 
     @patch('sys.stdout')
     @patch('os.system')
-    @patch('kiwi.utils.output.NamedTemporaryFile')
+    @patch('kiwi.utils.output.Temporary.new_file')
     def test_display_color(self, mock_temp, mock_system, mock_stdout):
         out_file = mock.Mock()
         out_file.name = 'tmpfile'

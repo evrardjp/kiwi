@@ -27,11 +27,11 @@ GENERATOR_DIR="$1"
 [ -e /config.bootoptions ] || exit 1
 
 root_uuid=$(
-    while read -r -d ' ' opt; do echo "${opt}";done < /config.bootoptions |\
+    awk '{ for(i=1; i <= NF; i++) {print $i } }' /config.bootoptions |\
     grep root= | cut -f2- -d=
 )
 
-[ -z "${root_uuid}" ] && exit 1
+[ -z "${root_uuid}" ] && exit 2
 
 {
     echo "[Unit]"

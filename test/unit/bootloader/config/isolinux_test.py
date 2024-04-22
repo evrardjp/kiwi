@@ -23,7 +23,7 @@ class TestBootLoaderConfigIsoLinux:
         mock_exists.return_value = True
         self.state = mock.Mock()
         self.state.get_build_type_bootloader_console = mock.Mock(
-            return_value=None
+            return_value=['', '']
         )
         self.state.build_type.get_mediacheck = mock.Mock(
             return_value=None
@@ -93,6 +93,10 @@ class TestBootLoaderConfigIsoLinux:
             self.state, 'root_dir'
         )
 
+    @patch('os.path.exists')
+    def setup_method(self, cls, mock_exists):
+        self.setup()
+
     def test_post_init_ix86_platform(self):
         Defaults.set_platform_name('i686')
         bootloader = BootLoaderConfigIsoLinux(self.state, 'root_dir')
@@ -135,7 +139,7 @@ class TestBootLoaderConfigIsoLinux:
 
         self.bootloader.setup_install_image_config(mbrid=None)
         self.isolinux.get_install_template.assert_called_once_with(
-            True, False, None, True
+            True, False, '', True
         )
         self.isolinux.get_install_message_template.assert_called_once_with()
         assert template_cfg.substitute.called
@@ -146,7 +150,7 @@ class TestBootLoaderConfigIsoLinux:
 
         self.bootloader.setup_install_image_config(mbrid=None)
         self.isolinux.get_multiboot_install_template.assert_called_once_with(
-            True, False, None, True
+            True, False, '', True
         )
 
     @patch('os.path.exists')
@@ -155,7 +159,7 @@ class TestBootLoaderConfigIsoLinux:
 
         self.bootloader.setup_install_image_config(mbrid=None)
         self.isolinux.get_install_template.assert_called_once_with(
-            True, True, None, True
+            True, True, '', True
         )
 
     def test_setup_install_image_config_invalid_template(self):
@@ -196,7 +200,7 @@ class TestBootLoaderConfigIsoLinux:
 
         self.bootloader.setup_live_image_config(mbrid=None)
         self.isolinux.get_template.assert_called_once_with(
-            True, False, None, None
+            True, False, '', None
         )
         self.isolinux.get_message_template.assert_called_once_with()
         template_cfg.substitute.assert_called_once_with(template_parameters)
@@ -207,5 +211,5 @@ class TestBootLoaderConfigIsoLinux:
 
         self.bootloader.setup_live_image_config(mbrid=None)
         self.isolinux.get_multiboot_template.assert_called_once_with(
-            True, False, None, None
+            True, False, '', None
         )

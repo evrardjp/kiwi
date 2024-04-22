@@ -1,10 +1,12 @@
+import logging
 from mock import patch
 import mock
 from builtins import bytes
 from lxml import etree
 from pytest import raises
 from collections import namedtuple
-from tempfile import NamedTemporaryFile
+from kiwi.utils.temporary import Temporary
+from pytest import fixture
 
 from kiwi.xml_description import XMLDescription
 
@@ -20,6 +22,10 @@ from kiwi.exceptions import (
 
 
 class TestSchema:
+    @fixture(autouse=True)
+    def inject_fixtures(self, caplog):
+        self._caplog = caplog
+
     def setup(self):
         test_xml = bytes(
             b"""<?xml version="1.0" encoding="utf-8"?>
@@ -118,31 +124,34 @@ class TestSchema:
         self.description_from_file = XMLDescription(
             description='../data/example_config.xml'
         )
-        test_xml_file = NamedTemporaryFile()
+        test_xml_file = Temporary().new_file()
         with open(test_xml_file.name, 'wb') as description:
             description.write(test_xml)
         self.description_from_data = XMLDescription(test_xml_file.name)
 
-        test_xml_extension_file = NamedTemporaryFile()
+        test_xml_extension_file = Temporary().new_file()
         with open(test_xml_extension_file.name, 'wb') as description:
             description.write(test_xml_extension)
         self.extension_description_from_data = XMLDescription(
             test_xml_extension_file.name
         )
 
-        test_xml_extension_not_unique_file = NamedTemporaryFile()
+        test_xml_extension_not_unique_file = Temporary().new_file()
         with open(test_xml_extension_not_unique_file.name, 'wb') as description:
             description.write(test_xml_extension_not_unique)
         self.extension_multiple_toplevel_description_from_data = XMLDescription(
             test_xml_extension_not_unique_file.name
         )
 
-        test_xml_extension_invalid_file = NamedTemporaryFile()
+        test_xml_extension_invalid_file = Temporary().new_file()
         with open(test_xml_extension_invalid_file.name, 'wb') as description:
             description.write(test_xml_extension_invalid)
         self.extension_invalid_description_from_data = XMLDescription(
             test_xml_extension_invalid_file.name
         )
+
+    def setup_method(self, cls):
+        self.setup()
 
     def test_load_schema_from_xml_content(self):
         schema = etree.parse('../../kiwi/schema/kiwi.rng')
@@ -162,6 +171,15 @@ class TestSchema:
         )
         with raises(KiwiSchemaImportError):
             self.description_from_file.load()
+
+    @patch('importlib.import_module')
+    def test_load_schema_from_xml_content_skipping_isoschematron(
+        self, mock_import_module
+    ):
+        mock_import_module.side_effect = Exception
+        with self._caplog.at_level(logging.WARNING):
+            self.description_from_data.load()
+            assert 'schematron validation skipped:' in self._caplog.text
 
     @patch('lxml.isoschematron.Schematron')
     @patch('lxml.etree.RelaxNG')

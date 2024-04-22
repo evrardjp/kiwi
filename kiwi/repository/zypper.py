@@ -16,11 +16,12 @@
 # along with kiwi.  If not, see <http://www.gnu.org/licenses/>
 #
 import os
+import re
 from configparser import ConfigParser
-from tempfile import NamedTemporaryFile
 from typing import List, Dict
 
 # project
+from kiwi.utils.temporary import Temporary
 from kiwi.defaults import Defaults
 from kiwi.command import Command
 from kiwi.repository.base import RepositoryBase
@@ -108,12 +109,12 @@ class RepositoryZypper(RepositoryBase):
             )
         }
 
-        self.runtime_zypper_config_file = NamedTemporaryFile(
-            dir=self.root_dir
-        )
-        self.runtime_zypp_config_file = NamedTemporaryFile(
-            dir=self.root_dir
-        )
+        self.runtime_zypper_config_file = Temporary(
+            path=self.root_dir
+        ).new_file()
+        self.runtime_zypp_config_file = Temporary(
+            path=self.root_dir
+        ).new_file()
 
         self.zypper_args = [
             '--non-interactive',
@@ -129,11 +130,11 @@ class RepositoryZypper(RepositoryBase):
         self.command_env = self._create_zypper_runtime_environment()
 
         # config file parameters for zypper tool
-        self.runtime_zypper_config = ConfigParser()
+        self.runtime_zypper_config = ConfigParser(interpolation=None)
         self.runtime_zypper_config.add_section('main')
 
         # config file parameters for libzypp library
-        self.runtime_zypp_config = ConfigParser()
+        self.runtime_zypp_config = ConfigParser(interpolation=None)
         self.runtime_zypp_config.add_section('main')
         self.runtime_zypp_config.set(
             'main', 'credentials.global.dir',
@@ -247,7 +248,8 @@ class RepositoryZypper(RepositoryBase):
         prio: int = None, dist: str = None, components: str = None,
         user: str = None, secret: str = None, credentials_file: str = None,
         repo_gpgcheck: bool = False, pkg_gpgcheck: bool = False,
-        sourcetype: str = None, use_for_bootstrap: bool = False
+        sourcetype: str = None, use_for_bootstrap: bool = False,
+        customization_script: str = None
     ) -> None:
         """
         Add zypper repository
@@ -265,6 +267,8 @@ class RepositoryZypper(RepositoryBase):
         :param bool pkg_gpgcheck: enable package signature validation
         :param str sourcetype: unused
         :param boot use_for_bootstrap: unused
+        :param str customization_script:
+            custom script called after the repo file was created
         """
         if credentials_file:
             repo_secret = os.sep.join(
@@ -317,8 +321,17 @@ class RepositoryZypper(RepositoryBase):
                 zypper_addrepo_command, self.command_env
             )
 
-        repo_config = ConfigParser()
+        repo_config = ConfigParser(interpolation=None)
         repo_config.read(repo_file)
+
+        baseurl = uri
+        uri_with_credentials_pattern = '^(.*):(.*)@(.*)$'
+        sensitive_match = re.match(uri_with_credentials_pattern, baseurl)
+        if sensitive_match:
+            # rewrite baseurl with credentials information because zypper
+            # addrepo does strange things with the provided url encoded data
+            repo_config.set(name, 'baseurl', baseurl)
+
         repo_config.set(
             name, 'repo_gpgcheck', '1' if repo_gpgcheck else '0'
         )
@@ -331,6 +344,8 @@ class RepositoryZypper(RepositoryBase):
             )
         with open(repo_file, 'w') as repo:
             repo_config.write(repo)
+        if customization_script:
+            self.run_repo_customize(customization_script, repo_file)
         self._restore_package_cache()
 
     def import_trusted_keys(self, signing_keys: List) -> None:

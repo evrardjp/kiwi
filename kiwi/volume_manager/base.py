@@ -16,11 +16,12 @@
 # along with kiwi.  If not, see <http://www.gnu.org/licenses/>
 #
 from collections import namedtuple
-from tempfile import mkdtemp
+from typing import Optional
 import logging
 import os
 
 # project
+from kiwi.utils.temporary import Temporary
 from kiwi.command import Command
 from kiwi.storage.device_provider import DeviceProvider
 from kiwi.mount_manager import MountManager
@@ -149,7 +150,7 @@ class VolumeManagerBase(DeviceProvider):
                 Command.run(
                     [
                         'chattr', '+C',
-                        os.path.normpath(toplevel + volume.realpath)
+                        os.path.normpath(toplevel + os.sep + volume.realpath)
                     ]
                 )
 
@@ -330,6 +331,19 @@ class VolumeManagerBase(DeviceProvider):
         """
         return self.mountpoint
 
+    def get_root_volume_name(self) -> str:
+        """
+        Provides name of the root volume
+
+        This is by default set to '/'. Volume Managers that supports
+        the concept of sub-volumes overrides this method
+
+        :return: directory path name
+
+        :rtype: string
+        """
+        return '/'
+
     def sync_data(self, exclude=None):
         """
         Implements sync of root directory to mounted volumes
@@ -345,6 +359,20 @@ class VolumeManagerBase(DeviceProvider):
                 options=Defaults.get_sync_options(), exclude=exclude
             )
 
+    def create_verity_layer(
+        self, blocks: Optional[int] = None, filename: str = None
+    ):
+        """
+        veritysetup on LVM devices is not supported
+        """
+        raise NotImplementedError
+
+    def create_verification_metadata(self, device_node: str = '') -> None:
+        """
+        Write verification block on LVM devices is not supported
+        """
+        raise NotImplementedError
+
     def set_property_readonly_root(self):
         """
         Implements setup of read-only root property
@@ -358,9 +386,6 @@ class VolumeManagerBase(DeviceProvider):
         Implements creation of a master directory holding
         the mounts of all volumes
         """
-        self.mountpoint = mkdtemp(prefix='kiwi_volumes.')
-        self.temp_directories.append(self.mountpoint)
-
-    def _cleanup_tempdirs(self):
-        for directory in self.temp_directories:
-            Path.wipe(directory)
+        self.mountpoint_tempdir = Temporary(prefix='kiwi_volumes.').new_dir()
+        self.mountpoint = self.mountpoint_tempdir.name
+        self.temp_directories.append(self.mountpoint_tempdir)

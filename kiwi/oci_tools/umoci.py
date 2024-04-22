@@ -15,10 +15,10 @@
 # You should have received a copy of the GNU General Public License
 # along with kiwi.  If not, see <http://www.gnu.org/licenses/>
 #
-from tempfile import mkdtemp
 import os
 
 # project
+from kiwi.utils.temporary import Temporary
 from kiwi.oci_tools.base import OCIBase
 from kiwi.command import Command
 from kiwi.path import Path
@@ -34,7 +34,8 @@ class OCIUmoci(OCIBase):
         """
         Initializes some umoci parameters and options
         """
-        self.oci_dir = mkdtemp(prefix='kiwi_oci_dir.')
+        self.oci_dir_tempfile = Temporary(prefix='kiwi_oci_dir.').new_dir()
+        self.oci_dir = self.oci_dir_tempfile.name
         self.container_dir = os.sep.join(
             [self.oci_dir, 'oci_layout']
         )
@@ -42,7 +43,8 @@ class OCIUmoci(OCIBase):
             self.container_dir, Defaults.get_container_base_image_tag()
         )
         if CommandCapabilities.has_option_in_help(
-            'umoci', '--no-history', ['config', '--help']
+            'umoci', '--no-history', ['config', '--help'],
+            raise_on_error=False
         ):
             self.no_history_flag = ['--no-history']
         else:
@@ -54,14 +56,20 @@ class OCIUmoci(OCIBase):
 
         :param str container_image_ref: container image reference
         """
-        Command.run([
-            'skopeo', 'copy', container_image_ref, 'oci:{0}:{1}'.format(
-                self.container_dir, Defaults.get_container_base_image_tag()
+        Command.run(
+            [
+                'skopeo', 'copy', container_image_ref, 'oci:{0}:{1}'.format(
+                    self.container_dir, Defaults.get_container_base_image_tag()
+                )
+            ] + (
+                [
+                    '--tmpdir', Defaults.get_temp_location()
+                ] if self._skopeo_provides_tmpdir_option() else []
             )
-        ])
+        )
 
     def export_container_image(
-        self, filename, transport, image_ref, additional_refs=None
+        self, filename, transport, image_ref, additional_names=None
     ):
         """
         Exports the working container to a container image archive
@@ -70,20 +78,26 @@ class OCIUmoci(OCIBase):
         :param str transport: The archive format
         :param str image_name: Name of the exported image
         :param str image_tag: Tag of the exported image
-        :param list additional_tags: List of additional references
+        :param list additional_names: List of additional references
         """
         extra_tags_opt = []
-        if additional_refs:
-            for ref in additional_refs:
+        if additional_names:
+            for ref in additional_names:
                 extra_tags_opt.extend(['--additional-tag', ref])
 
         # make sure the target tar file does not exist
         # skopeo doesn't support force overwrite
         Path.wipe(filename)
-        Command.run([
-            'skopeo', 'copy', 'oci:{0}'.format(self.working_image),
-            '{0}:{1}:{2}'.format(transport, filename, image_ref)
-        ] + extra_tags_opt)
+        Command.run(
+            [
+                'skopeo', 'copy', 'oci:{0}'.format(self.working_image),
+                '{0}:{1}:{2}'.format(transport, filename, image_ref)
+            ] + extra_tags_opt + (
+                [
+                    '--tmpdir', Defaults.get_temp_location()
+                ] if self._skopeo_provides_tmpdir_option() else []
+            )
+        )
 
     def init_container(self):
         """
@@ -102,7 +116,10 @@ class OCIUmoci(OCIBase):
         """
         Unpack current container root data
         """
-        self.oci_root_dir = mkdtemp(prefix='kiwi_oci_root_dir.')
+        self.oci_root_dir_tempdir = Temporary(
+            prefix='kiwi_oci_root_dir.'
+        ).new_dir()
+        self.oci_root_dir = self.oci_root_dir_tempdir.name
         Command.run([
             'umoci', 'unpack', '--image',
             self.working_image, self.oci_root_dir
@@ -119,7 +136,12 @@ class OCIUmoci(OCIBase):
             ''.join([root_dir, os.sep]),
             os.sep.join([self.oci_root_dir, 'rootfs']),
             exclude_list=exclude_list,
-            options=Defaults.get_sync_options() + ['--delete']
+            options=Defaults.get_sync_options() + [
+                '--filter', '-x! user.*',
+                '--filter', '-x! security.ima*',
+                '--filter', '-x! security.capability*',
+                '--delete'
+            ]
         )
 
     def import_rootfs(self, root_dir, exclude_list=None):
@@ -259,9 +281,3 @@ class OCIUmoci(OCIBase):
         Command.run(
             ['umoci', 'gc', '--layout', self.container_dir]
         )
-
-    def __del__(self):
-        if self.oci_root_dir:
-            Path.wipe(self.oci_root_dir)
-        if self.oci_dir:
-            Path.wipe(self.oci_dir)

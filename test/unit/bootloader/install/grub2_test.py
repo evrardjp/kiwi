@@ -1,5 +1,6 @@
+import io
 from mock import (
-    patch, call
+    patch, call, MagicMock
 )
 from pytest import raises
 import mock
@@ -28,12 +29,15 @@ class TestBootLoaderInstallGrub2:
             'root_device': '/dev/mapper/loop0p1',
             'efi_device': '/dev/mapper/loop0p3',
             'prep_device': '/dev/mapper/loop0p2',
+            'system_root_volume': 'root',
             'system_volumes': {'boot/grub2': {
                 'volume_options': 'subvol=@/boot/grub2',
                 'volume_device': 'device'
             }},
             'firmware': self.firmware,
-            'target_removable': None
+            'target_removable': None,
+            'install_options': [],
+            'shim_options': []
         }
 
         self.root_mount = mock.Mock()
@@ -83,6 +87,9 @@ class TestBootLoaderInstallGrub2:
         self.bootloader = BootLoaderInstallGrub2(
             'root_dir', device_provider, self.custom_args
         )
+
+    def setup_method(self, cls):
+        self.setup()
 
     @patch('kiwi.bootloader.install.grub2.Defaults.get_grub_path')
     def test_post_init_ppc_no_prep_device(self, mock_grub_path):
@@ -161,7 +168,9 @@ class TestBootLoaderInstallGrub2:
         mock_mount_manager.side_effect = side_effect
 
         self.bootloader.install()
-        self.bootloader.root_mount.mount.assert_called_once_with()
+        self.bootloader.root_mount.mount.assert_called_once_with(
+            options=['subvol=root']
+        )
         self.bootloader.boot_mount.mount.assert_called_once_with()
         mock_glob.assert_called_once_with(
             'tmp_root/boot/*/grubenv'
@@ -207,7 +216,9 @@ class TestBootLoaderInstallGrub2:
         mock_mount_manager.side_effect = side_effect
 
         self.bootloader.install()
-        self.bootloader.root_mount.mount.assert_called_once_with()
+        self.bootloader.root_mount.mount.assert_called_once_with(
+            options=['subvol=root']
+        )
         self.bootloader.boot_mount.mount.assert_called_once_with()
         assert mock_command.call_args_list == [
             call(
@@ -252,7 +263,9 @@ class TestBootLoaderInstallGrub2:
         mock_mount_manager.side_effect = side_effect
 
         self.bootloader.install()
-        self.bootloader.root_mount.mount.assert_called_once_with()
+        self.bootloader.root_mount.mount.assert_called_once_with(
+            options=['subvol=root']
+        )
         self.bootloader.boot_mount.mount.assert_called_once_with()
         mock_wipe.assert_called_once_with(
             'tmp_root/boot/grub2/grubenv'
@@ -291,7 +304,9 @@ class TestBootLoaderInstallGrub2:
         mock_mount_manager.side_effect = side_effect
 
         self.bootloader.install()
-        self.bootloader.root_mount.mount.assert_called_once_with()
+        self.bootloader.root_mount.mount.assert_called_once_with(
+            options=['subvol=root']
+        )
         self.bootloader.boot_mount.mount.assert_called_once_with()
         mock_wipe.assert_called_once_with(
             'tmp_root/boot/grub2/grubenv'
@@ -332,7 +347,9 @@ class TestBootLoaderInstallGrub2:
         self.bootloader.target_removable = True
 
         self.bootloader.install()
-        self.root_mount.mount.assert_called_once_with()
+        self.root_mount.mount.assert_called_once_with(
+            options=['subvol=root']
+        )
         self.volume_mount.mount.assert_called_once_with(
             options=['subvol=@/boot/grub2']
         )
@@ -374,22 +391,27 @@ class TestBootLoaderInstallGrub2:
 
         assert mock_command.call_args_list == [
             call([
-                'cp', '-p', 'tmp_root/usr/sbin/grub2-install',
-                'tmp_root/usr/sbin/grub2-install.orig'
+                'chroot', 'tmp_root',
+                'cp', '-p', '/usr/sbin/grub2-install',
+                '/usr/sbin/grub2-install.orig'
             ]),
             call([
-                'cp', 'tmp_root/bin/true', 'tmp_root/usr/sbin/grub2-install'
+                'chroot', 'tmp_root',
+                'cp', '/bin/true', '/usr/sbin/grub2-install'
             ]),
             call([
                 'chroot', 'tmp_root', 'shim-install', '--removable',
                 '/dev/some-device'
             ]),
             call([
-                'mv', 'tmp_root/usr/sbin/grub2-install.orig',
-                'tmp_root/usr/sbin/grub2-install'
+                'chroot', 'tmp_root',
+                'mv', '/usr/sbin/grub2-install.orig',
+                '/usr/sbin/grub2-install'
             ])
         ]
-        self.root_mount.mount.assert_called_once_with()
+        self.root_mount.mount.assert_called_once_with(
+            options=['subvol=root']
+        )
         self.volume_mount.mount.assert_called_once_with(
             options=['subvol=@/boot/grub2']
         )
@@ -412,7 +434,9 @@ class TestBootLoaderInstallGrub2:
         mock_mount_manager.side_effect = side_effect
 
         self.bootloader.secure_boot_install()
-        self.root_mount.mount.assert_called_once_with()
+        self.root_mount.mount.assert_called_once_with(
+            options=['subvol=root']
+        )
         self.volume_mount.mount.assert_called_once_with(
             options=['subvol=@/boot/grub2']
         )
@@ -423,6 +447,19 @@ class TestBootLoaderInstallGrub2:
         mock_which.assert_called_once_with(
             filename='shim-install', root_dir='tmp_root'
         )
+
+    @patch('os.path.isfile')
+    def test_set_disk_password(self, mock_os_path_is_file):
+        self.bootloader.root_mount = MagicMock()
+        self.bootloader.root_mount.mountpoint = 'root_mountpoint'
+        with patch('builtins.open', create=True) as mock_open:
+            mock_open.return_value = MagicMock(spec=io.IOBase)
+            file_handle = mock_open.return_value.__enter__.return_value
+            file_handle.read.return_value = 'data__cryptomount__data'
+            self.bootloader.set_disk_password('credentials')
+            file_handle.write.assert_called_once_with(
+                'data__cryptomount -p "credentials"__data'
+            )
 
     @patch('kiwi.bootloader.install.grub2.Command.run')
     @patch('kiwi.bootloader.install.grub2.MountManager')

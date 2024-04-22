@@ -20,12 +20,16 @@ class TestBootImageBase:
     def setup(self, mock_exists):
         Defaults.set_platform_name('x86_64')
         self.boot_names_type = namedtuple(
-            'boot_names_type', ['kernel_name', 'initrd_name']
+            'boot_names_type', [
+                'kernel_name', 'initrd_name',
+                'kernel_version', 'kernel_filename'
+            ]
         )
         self.kernel = Mock()
         kernel_info = Mock
         kernel_info.name = 'kernel_name'
         kernel_info.version = 'kernel_version'
+        kernel_info.filename = 'kernel_filename'
         self.kernel.get_kernel.return_value = kernel_info
         self.boot_xml_state = Mock()
         self.xml_state = Mock()
@@ -45,6 +49,10 @@ class TestBootImageBase:
         self.boot_image = BootImageBase(
             self.xml_state, 'some-target-dir', 'system-directory'
         )
+
+    @patch('kiwi.boot.image.base.os.path.exists')
+    def setup_method(self, cls, mock_exists):
+        self.setup()
 
     def test_boot_image_raises(self):
         with raises(KiwiTargetDirectoryNotFound):
@@ -104,6 +112,17 @@ class TestBootImageBase:
             self.boot_image.get_boot_names()
 
     @patch('kiwi.boot.image.base.Kernel')
+    def test_get_boot_names_with_initrd_system_set_to_none(self, mock_Kernel):
+        kernel = Mock()
+        mock_Kernel.return_value = kernel
+        kernel.get_kernel.return_value = None
+        self.xml_state.get_initrd_system.return_value = 'none'
+        boot_names = self.boot_image.get_boot_names()
+        assert boot_names.kernel_name == 'none'
+        assert boot_names.initrd_name == 'none'
+        assert boot_names.kernel_version == 'none'
+
+    @patch('kiwi.boot.image.base.Kernel')
     @patch('kiwi.boot.image.base.Path.which')
     @patch('kiwi.boot.image.base.log.warning')
     @patch('glob.iglob')
@@ -116,12 +135,16 @@ class TestBootImageBase:
         self.xml_state.get_initrd_system.return_value = 'kiwi'
         assert self.boot_image.get_boot_names() == self.boot_names_type(
             kernel_name='kernel_name',
-            initrd_name='initrd-kernel_version'
+            initrd_name='initrd-kernel_version',
+            kernel_version='kernel_version',
+            kernel_filename='kernel_filename'
         )
         self.xml_state.get_initrd_system.return_value = 'dracut'
         assert self.boot_image.get_boot_names() == self.boot_names_type(
             kernel_name='kernel_name',
-            initrd_name='initramfs-kernel_version.img'
+            initrd_name='initramfs-kernel_version.img',
+            kernel_version='kernel_version',
+            kernel_filename='kernel_filename'
         )
 
     @patch('kiwi.boot.image.base.Kernel')
@@ -142,7 +165,9 @@ class TestBootImageBase:
         self.xml_state.get_initrd_system.return_value = 'dracut'
         assert self.boot_image.get_boot_names() == self.boot_names_type(
             kernel_name='kernel_name',
-            initrd_name='initrd.img-kernel_version'
+            initrd_name='initrd.img-kernel_version',
+            kernel_version='kernel_version',
+            kernel_filename='kernel_filename'
         )
 
     @patch('kiwi.boot.image.base.Kernel')
@@ -162,7 +187,16 @@ class TestBootImageBase:
             file_handle.read.return_value = 'outfile="/boot/initrd-$kernel"'
             assert self.boot_image.get_boot_names() == self.boot_names_type(
                 kernel_name='kernel_name',
-                initrd_name='initrd-kernel_version'
+                initrd_name='initrd-kernel_version',
+                kernel_version='kernel_version',
+                kernel_filename='kernel_filename'
+            )
+            file_handle.read.return_value = 'outfile="/boot/initrd-${kernel}"'
+            assert self.boot_image.get_boot_names() == self.boot_names_type(
+                kernel_name='kernel_name',
+                initrd_name='initrd-kernel_version',
+                kernel_version='kernel_version',
+                kernel_filename='kernel_filename'
             )
 
     def test_noop_methods(self):

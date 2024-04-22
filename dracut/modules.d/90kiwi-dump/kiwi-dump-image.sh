@@ -8,25 +8,6 @@ type fetch_file >/dev/null 2>&1 || . /lib/kiwi-net-lib.sh
 #======================================
 # Functions
 #--------------------------------------
-function report_and_quit {
-    local text_message="$1"
-    run_dialog --timeout 60 --msgbox "\"${text_message}\"" 5 80
-    if getargbool 0 rd.debug; then
-        die "${text_message}"
-    else
-        reboot -f
-    fi
-}
-
-function initialize {
-    local profile=/.profile
-
-    test -f ${profile} || \
-        report_and_quit "No profile setup found"
-
-    import_file ${profile}
-}
-
 function scan_multipath_devices {
     # """
     # starts multipath daemon from multipath module
@@ -39,6 +20,8 @@ function get_disk_list {
     declare kiwi_oemmultipath_scan=${kiwi_oemmultipath_scan}
     declare kiwi_devicepersistency=${kiwi_devicepersistency}
     declare kiwi_install_volid=${kiwi_install_volid}
+    declare kiwi_oemunattended=${kiwi_oemunattended}
+    declare kiwi_oemunattended_id=${kiwi_oemunattended_id}
     local disk_id="by-id"
     local disk_size
     local disk_device
@@ -49,12 +32,15 @@ function get_disk_list {
     local kiwi_oem_maxdisk
     local blk_opts="-p -n -r -o NAME,SIZE,TYPE"
     local message
+    local blk_opts_plus_label="${blk_opts},LABEL"
+    local kiwi_install_disk_part
     if [ -n "${kiwi_devicepersistency}" ];then
         disk_id=${kiwi_devicepersistency}
     fi
     max_disk=0
     kiwi_oemmultipath_scan=$(bool "${kiwi_oemmultipath_scan}")
     kiwi_oem_maxdisk=$(getarg rd.kiwi.oem.maxdisk=)
+    kiwi_oem_installdevice=$(getarg rd.kiwi.oem.installdevice=)
     if [ -n "${kiwi_oem_maxdisk}" ]; then
         max_disk=$(binsize_to_bytesize "${kiwi_oem_maxdisk}") || max_disk=0
     fi
@@ -75,13 +61,17 @@ function get_disk_list {
     elif [ "${kiwi_oemmultipath_scan}" = "true" ];then
         scan_multipath_devices
     fi
+    kiwi_install_disk_part=$(
+        eval lsblk "${blk_opts_plus_label}" | \
+        tr -s ' ' ":" | \
+        grep ":${kiwi_install_volid}$" | \
+        cut -f1 -d:
+    )
     for disk_meta in $(
         eval lsblk "${blk_opts}" | grep -E "disk|raid" | tr ' ' ":"
     );do
         disk_device="$(echo "${disk_meta}" | cut -f1 -d:)"
-        if [ "$(blkid "${disk_device}" -s LABEL -o value)" = \
-            "${kiwi_install_volid}" ]
-        then
+        if [[ "${kiwi_install_disk_part}" == "${disk_device}"* ]]; then
             # ignore install source device
             continue
         fi
@@ -120,6 +110,26 @@ function get_disk_list {
         fi
         list_items="${list_items} ${disk_device} ${disk_size}"
     done
+    if [ -n "${kiwi_oem_installdevice}" ];then
+        # install device overwritten by cmdline.
+        local device=${kiwi_oem_installdevice}
+        local device_meta
+        local device_size
+        if [ ! -e "${device}" ];then
+            local no_dev="Given device ${device} does not exist"
+            report_and_quit "${no_dev}"
+        fi
+        if [ ! -b "${device}" ];then
+            local no_block_dev="Given device ${device} is not a block special"
+            report_and_quit "${no_block_dev}"
+        fi
+        device_meta=$(
+            eval lsblk "${blk_opts}" "${device}" |\
+            grep -E "disk|raid" | tr ' ' ":"
+        )
+        device_size=$(echo "${device_meta}" | cut -f2 -d:)
+        list_items="${device} ${device_size}"
+    fi
     if [ -z "${list_items}" ];then
         local no_device_text="No device(s) for installation found"
         report_and_quit "${no_device_text}"

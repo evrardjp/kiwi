@@ -26,17 +26,14 @@ class TestSystemPrepareTask:
 
         self.abs_root_dir = os.path.abspath('../data/root-dir')
 
+        self.command = mock.Mock()
+        kiwi.tasks.system_prepare.Command = self.command
+
         kiwi.tasks.system_prepare.Privileges = mock.Mock()
 
         self.runtime_checker = mock.Mock()
         kiwi.tasks.base.RuntimeChecker = mock.Mock(
             return_value=self.runtime_checker
-        )
-
-        self.runtime_config = mock.Mock()
-        self.runtime_config.get_disabled_runtime_checks.return_value = []
-        kiwi.tasks.base.RuntimeConfig = mock.Mock(
-            return_value=self.runtime_config
         )
 
         self.system_prepare = mock.Mock()
@@ -64,9 +61,16 @@ class TestSystemPrepareTask:
             return_value=mock.Mock()
         )
         self.task = SystemPrepareTask()
+        self.task.runtime_config = mock.MagicMock()
+
+    def setup_method(self, cls):
+        self.setup()
 
     def teardown(self):
         sys.argv = argv_kiwi_tests
+
+    def teardown_method(self, cls):
+        self.teardown()
 
     def _init_command_args(self):
         self.task.command_args = {}
@@ -76,7 +80,9 @@ class TestSystemPrepareTask:
         self.task.command_args['--root'] = '../data/root-dir'
         self.task.command_args['--allow-existing-root'] = False
         self.task.command_args['--set-repo'] = None
+        self.task.command_args['--set-repo-credentials'] = None
         self.task.command_args['--add-repo'] = []
+        self.task.command_args['--add-repo-credentials'] = []
         self.task.command_args['--add-package'] = []
         self.task.command_args['--add-bootstrap-package'] = []
         self.task.command_args['--delete-package'] = []
@@ -86,9 +92,11 @@ class TestSystemPrepareTask:
         self.task.command_args['--set-container-derived-from'] = None
         self.task.command_args['--set-container-tag'] = None
         self.task.command_args['--add-container-label'] = []
-        self.task.command_args['--signing-key'] = None
+        self.task.command_args['--signing-key'] = []
 
-    def test_process_system_prepare(self):
+    @patch('kiwi.xml_state.XMLState.get_repositories_signing_keys')
+    def test_process_system_prepare(self, mock_keys):
+        mock_keys.return_value = ['some_key', 'some_other_key']
         self._init_command_args()
         self.task.command_args['prepare'] = True
         self.task.command_args['--clear-cache'] = True
@@ -141,7 +149,7 @@ class TestSystemPrepareTask:
             check_architecture_supports_iso_firmware_setup.\
             assert_called_once_with()
         self.system_prepare.setup_repositories.assert_called_once_with(
-            True, None, None
+            True, ['some_key', 'some_other_key'], None
         )
         self.system_prepare.install_bootstrap.assert_called_once_with(
             self.manager, []
@@ -166,29 +174,54 @@ class TestSystemPrepareTask:
         self.setup.setup_plymouth_splash.assert_called_once_with()
         self.setup.setup_timezone.assert_called_once_with()
         self.setup.setup_permissions.assert_called_once_with()
+        self.setup.setup_selinux_file_contexts.assert_called_once_with()
 
         self.system_prepare.pinch_system.assert_has_calls(
             [call(force=False), call(force=True)]
         )
         assert self.system_prepare.clean_package_manager_leftovers.called
 
-    def test_process_system_prepare_add_package(self):
+    @patch('kiwi.xml_state.XMLState.get_package_manager')
+    def test_process_system_prepare_run_debootstrap_only_once(
+        self, mock_get_package_manager
+    ):
+        self._init_command_args()
+        mock_get_package_manager.return_value = 'apt'
+        self.task.command_args['--allow-existing-root'] = True
+
+        # debootstrap must be called if chroot with apt-get failed
+        self.command.run.side_effect = Exception
+        self.task.process()
+        assert self.system_prepare.install_bootstrap.called
+
+        # debootstrap must not be called if chroot looks good
+        self.command.run.side_effect = None
+        self.system_prepare.install_bootstrap.reset_mock()
+        with self._caplog.at_level(logging.WARNING):
+            self.task.process()
+        assert not self.system_prepare.install_bootstrap.called
+
+    @patch('kiwi.xml_state.XMLState.get_repositories_signing_keys')
+    def test_process_system_prepare_add_package(self, mock_keys):
+        mock_keys.return_value = ['some_key', 'some_other_key']
         self._init_command_args()
         self.task.command_args['--add-package'] = ['vim']
         self.task.process()
         self.system_prepare.setup_repositories.assert_called_once_with(
-            False, None, None
+            False, ['some_key', 'some_other_key'], None
         )
         self.system_prepare.install_packages.assert_called_once_with(
             self.manager, ['vim']
         )
 
-    def test_process_system_prepare_delete_package(self):
+    @patch('kiwi.xml_state.XMLState.get_repositories_signing_keys')
+    def test_process_system_prepare_delete_package(self, mock_keys):
+        mock_keys.return_value = ['some_key', 'some_other_key']
         self._init_command_args()
         self.task.command_args['--delete-package'] = ['vim']
         self.task.process()
         self.system_prepare.setup_repositories.assert_called_once_with(
-            False, None, None
+            False, ['some_key', 'some_other_key'], None
         )
         self.system_prepare.delete_packages.assert_called_once_with(
             self.manager, ['vim']
@@ -234,24 +267,79 @@ class TestSystemPrepareTask:
         )
 
     @patch('kiwi.xml_state.XMLState.set_repository')
-    def test_process_system_prepare_set_repo(self, mock_state):
+    @patch('os.path.isfile')
+    @patch('os.unlink')
+    def test_process_system_prepare_set_repo(
+        self, mock_os_unlink, mock_os_path_is_file, mock_set_repo
+    ):
+        mock_os_path_is_file.return_value = False
         self._init_command_args()
         self.task.command_args['--set-repo'] = 'http://example.com,yast2,alias'
         self.task.process()
-        mock_state.assert_called_once_with(
-            'http://example.com', 'yast2', 'alias', None, None, None
+        mock_set_repo.assert_called_once_with(
+            'http://example.com', 'yast2', 'alias',
+            None, None, None, [], None, None, None
         )
+        self.task.command_args['--set-repo-credentials'] = 'user:pass'
+        mock_set_repo.reset_mock()
+        self.task.process()
+        mock_set_repo.assert_called_once_with(
+            'http://user:pass@example.com', 'yast2', 'alias',
+            None, None, None, [], None, None, None
+        )
+        self.task.command_args['--set-repo-credentials'] = '../data/credentials'
+        mock_os_path_is_file.return_value = True
+        mock_set_repo.reset_mock()
+        self.task.process()
+        mock_set_repo.assert_called_once_with(
+            'http://user:pass@example.com', 'yast2', 'alias',
+            None, None, None, [], None, None, None
+        )
+        mock_os_unlink.assert_called_once_with('../data/credentials')
 
     @patch('kiwi.xml_state.XMLState.add_repository')
-    def test_process_system_prepare_add_repo(self, mock_state):
+    def test_process_system_prepare_add_repo(self, mock_add_repo):
         self._init_command_args()
         self.task.command_args['--add-repo'] = [
-            'http://example.com,yast2,alias,99,true'
+            'http://example1.com,yast2,alias,99,true',
+            'http://example2.com,yast2,alias,99,false,true',
+            'http://example3.com,yast2,alias,99,false,true'
         ]
         self.task.process()
-        mock_state.assert_called_once_with(
-            'http://example.com', 'yast2', 'alias', '99', True, None
-        )
+        assert mock_add_repo.call_args_list == [
+            call(
+                'http://example1.com', 'yast2', 'alias', '99',
+                True, None, [], None, None, None
+            ),
+            call(
+                'http://example2.com', 'yast2', 'alias', '99',
+                False, True, [], None, None, None
+            ),
+            call(
+                'http://example3.com', 'yast2', 'alias', '99',
+                False, True, [], None, None, None
+            )
+        ]
+        self.task.command_args['--add-repo-credentials'] = [
+            'user1:pass1',
+            'user2:pass2'
+        ]
+        mock_add_repo.reset_mock()
+        self.task.process()
+        assert mock_add_repo.call_args_list == [
+            call(
+                'http://user1:pass1@example1.com', 'yast2', 'alias', '99',
+                True, None, [], None, None, None
+            ),
+            call(
+                'http://user2:pass2@example2.com', 'yast2', 'alias', '99',
+                False, True, [], None, None, None
+            ),
+            call(
+                'http://example3.com', 'yast2', 'alias', '99',
+                False, True, [], None, None, None
+            )
+        ]
 
     def test_process_system_prepare_help(self):
         self._init_command_args()

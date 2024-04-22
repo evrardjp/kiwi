@@ -29,6 +29,7 @@ class TestFileSystemBuilder:
         self.filesystem.sync_data = Mock()
 
         self.xml_state = Mock()
+        self.xml_state.profiles = None
         self.xml_state.get_build_type_unpartitioned_bytes = Mock(
             return_value=0
         )
@@ -64,6 +65,10 @@ class TestFileSystemBuilder:
         kiwi.builder.filesystem.SystemSetup = Mock(
             return_value=self.setup
         )
+
+    @patch('kiwi.builder.filesystem.FileSystemSetup')
+    def setup_method(self, cls, mock_fs_setup):
+        self.setup()
 
     def test_create_unknown_filesystem(self):
         self.xml_state.get_build_type_name = Mock(
@@ -162,3 +167,6 @@ class TestFileSystemBuilder:
 
     def teardown(self):
         sys.argv = argv_kiwi_tests
+
+    def teardown_method(self, cls):
+        self.teardown()

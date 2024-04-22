@@ -12,7 +12,11 @@ from kiwi.exceptions import KiwiRpmDirNotRemoteError
 class TestSolverRepositoryRpmDir:
     def setup(self):
         self.uri = Mock()
+        self.uri.uri = 'http://example.org/some/path'
         self.solver = SolverRepositoryRpmDir(self.uri)
+
+    def setup_method(self, cls):
+        self.setup()
 
     def test__setup_repository_metadata_raises(self):
         with raises(KiwiRpmDirNotRemoteError):

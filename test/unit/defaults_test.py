@@ -9,6 +9,7 @@ from .test_helper import argv_kiwi_tests
 
 from kiwi.defaults import Defaults
 from kiwi.defaults import grub_loader_type
+from kiwi.defaults import shim_loader_type
 
 
 class TestDefaults:
@@ -19,8 +20,14 @@ class TestDefaults:
     def setup(self):
         self.defaults = Defaults()
 
+    def setup_method(self, cls):
+        self.setup()
+
     def teardown(self):
         sys.argv = argv_kiwi_tests
+
+    def teardown_method(self, cls):
+        self.teardown()
 
     def test_get(self):
         assert self.defaults.get('kiwi_align') == 1048576
@@ -82,6 +89,9 @@ class TestDefaults:
         assert Defaults.get_unsigned_grub_loader('root') == \
             mock_glob.return_value.pop()
         mock_glob.assert_called_once_with('root/usr/share/grub*/*-efi/grub.efi')
+        mock_glob.reset_mock()
+        mock_glob.return_value = []
+        assert Defaults.get_unsigned_grub_loader('root') is None
 
     def test_is_x86_arch(self):
         assert Defaults.is_x86_arch('x86_64') is True
@@ -111,6 +121,17 @@ class TestDefaults:
             assert Defaults.get_exclude_list_from_custom_exclude_files(
                 '../data/root-dir'
             ) == []
+
+    def test_get_exclude_list_for_root_data_sync(self):
+        assert Defaults.get_exclude_list_for_root_data_sync() == [
+            'image', '.profile', '.kconfig',
+            'run/*', 'tmp/*',
+            '.buildenv', 'var/cache/kiwi'
+        ]
+        assert Defaults.get_exclude_list_for_root_data_sync(no_tmpdirs=False) == [
+            'image', '.profile', '.kconfig',
+            '.buildenv', 'var/cache/kiwi'
+        ]
 
     @patch('glob.iglob')
     def test_get_signed_grub_loader(self, mock_iglob):
@@ -147,3 +168,52 @@ class TestDefaults:
             '/usr/lib/grub/x86_64-efi-signed/grubx64.efi.signed',
             binaryname='grubx64.efi'
         )
+
+    @patch('glob.iglob')
+    def test_get_mok_manager(self, mock_iglob):
+        mock_iglob.return_value = []
+        assert Defaults.get_mok_manager('root_path') is None
+
+        mock_iglob.return_value = ['some_glob_result']
+        assert Defaults.get_mok_manager('root_path') == 'some_glob_result'
+
+    @patch('glob.iglob')
+    def test_get_shim_loader(self, mock_iglob):
+        def iglob_simple_match(pattern):
+            if '/usr/lib64/efi/shim.efi' in pattern:
+                return ['root_path/usr/lib64/efi/shim.efi']
+            else:
+                return []
+
+        def iglob_custom_binary_match(pattern):
+            if '/usr/lib/shim/shimx64.efi.signed' in pattern:
+                return [
+                    'root_path'
+                    '/usr/lib/shim/shimx64.efi.signed'
+                ]
+            else:
+                return []
+
+        assert Defaults.get_shim_loader('root_path') is None
+
+        mock_iglob.side_effect = iglob_simple_match
+        assert Defaults.get_shim_loader('root_path') == shim_loader_type(
+            filename='root_path'
+            '/usr/lib64/efi/shim.efi',
+            binaryname='shim.efi'
+        )
+
+        mock_iglob.side_effect = iglob_custom_binary_match
+        assert Defaults.get_shim_loader('root_path/usr/lib/shim/shimx64.efi.signed') == shim_loader_type(
+            filename='root_path'
+            '/usr/lib/shim/shimx64.efi.signed',
+            binaryname='shimx64.efi'
+        )
+
+    @patch('os.path.exists')
+    def test_get_snapper_config_template_file(self, mock_os_path_exists):
+        mock_os_path_exists.return_value = False
+        assert Defaults.get_snapper_config_template_file('root') == ''
+        mock_os_path_exists.return_value = True
+        assert Defaults.get_snapper_config_template_file('root') == \
+            'root/etc/snapper/config-templates/default'

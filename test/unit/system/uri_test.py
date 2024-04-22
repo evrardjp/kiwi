@@ -6,7 +6,6 @@ from mock import (
 from pytest import (
     raises, fixture
 )
-import hashlib
 import mock
 
 from kiwi.system.uri import Uri
@@ -35,6 +34,9 @@ class TestUri:
         kiwi.system.uri.RuntimeConfig = Mock(
             return_value=self.runtime_config
         )
+
+    def setup_method(self, cls):
+        self.setup()
 
     def test_is_remote_raises_style_error(self):
         uri = Uri('xxx', 'rpm-md')
@@ -107,6 +109,17 @@ class TestUri:
         uri = Uri('/path/to/repo')
         assert uri.is_remote() is False
 
+    def test_uri_needs_encoding(self):
+        uri = Uri(
+            'https://user@mycompany.com:token_password@'
+            'artifactory-edge.mycompany.com/artifactory/'
+            'some_rpm_path/Base-Prod/sample.rpm'
+        )
+        assert uri.translate(False) == \
+            'https://user%40mycompany.com:token_password@' \
+            'artifactory-edge.mycompany.com/artifactory/' \
+            'some_rpm_path/Base-Prod/sample.rpm'
+
     @patch('kiwi.system.uri.Defaults.is_buildservice_worker')
     def test_is_remote_in_buildservice(
         self, mock_buildservice
@@ -137,11 +150,14 @@ class TestUri:
         uri = Uri('httpx://example.com', 'rpm-md')
         assert uri.is_public() is False
 
-    def test_alias(self):
+    def test_alias_is_str(self):
         uri = Uri('https://example.com', 'rpm-md')
-        assert uri.alias() == hashlib.md5(
-            'https://example.com'.encode()).hexdigest(
-        )
+        assert isinstance(uri.alias(), str) is True
+
+    def test_alias_is_uniq(self):
+        uri1 = Uri('https://example.com', 'rpm-md')
+        uri2 = Uri('https://example.com', 'rpm-md')
+        assert uri1.alias() != uri2.alias()
 
     def test_credentials_file_name(self):
         uri = Uri(
@@ -172,7 +188,11 @@ class TestUri:
         assert uri.translate() == 'http://example.com/foo'
 
     @patch('kiwi.system.uri.requests.get')
-    def test_translate_obs_project(self, mock_request_get):
+    @patch('kiwi.defaults.Defaults.is_buildservice_worker')
+    def test_translate_obs_project(
+        self, mock_is_buildservice_worker, mock_request_get
+    ):
+        mock_is_buildservice_worker.return_value = False
         uri = Uri('obs://openSUSE:Leap:42.2/standard', 'yast2')
         uri.runtime_config = self.runtime_config
         uri.translate()
@@ -243,3 +263,23 @@ class TestUri:
         mock_buildservice.return_value = True
         uri = Uri('obsrepositories:/')
         assert uri.translate() == '/usr/src/packages/SOURCES/repos'
+
+    @patch('kiwi.system.uri.urlopen')
+    @patch('kiwi.system.uri.Request')
+    def test_translate_metalink_uri(self, mock_Request, mock_urlopen):
+        with open('../data/metalink') as metalink:
+            mock_urlopen.return_value = metalink
+            uri = Uri('https://metalink.com/foo', source_type='metalink')
+            assert uri.translate() == \
+                'https://ftp.plusline.net/fedora/linux/releases/34/Everything/' \
+                'x86_64/os/'
+
+        mock_urlopen.side_effect = Exception
+        with raises(KiwiUriOpenError):
+            uri = Uri('https://metalink.com/foo', source_type='metalink')
+
+    def test_print_sensitive(self):
+        assert Uri.print_sensitive('https://user:pass@location') == \
+            'https://******@location'
+        assert Uri.print_sensitive('https://server.example.com/location') == \
+            'https://server.example.com/location'

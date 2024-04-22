@@ -60,6 +60,9 @@ class TestDiskFormatVmdk:
         self.xml_state.get_build_type_vmdvd_section = Mock(
             return_value=self.iso_setup
         )
+        self.xml_state.get_luks_credentials = Mock(
+            return_value=None
+        )
         self.iso_setup.get_controller = Mock(
             return_value='ide'
         )
@@ -103,6 +106,9 @@ class TestDiskFormatVmdk:
             self.xml_state, 'root_dir', 'target_dir'
         )
 
+    def setup_method(self, cls):
+        self.setup()
+
     def test_post_init(self):
         self.disk_format.post_init(
             {'option': 'value', 'adapter_type=pvscsi': None}
@@ -110,9 +116,8 @@ class TestDiskFormatVmdk:
         assert self.disk_format.options == [
             '-o', 'adapter_type=lsilogic', '-o', 'option=value'
         ]
-        assert self.disk_format.patch_header_for_pvscsi is True
 
-    def test_store_to_result(self):
+    def test_store_to_result_default(self):
         result = Mock()
         self.disk_format.store_to_result(result)
         assert result.add.call_args_list == [
@@ -131,6 +136,32 @@ class TestDiskFormatVmdk:
                 use_for_bundle=True
             )
         ]
+
+    def test_store_to_result_with_luks(self):
+        result = Mock()
+        self.xml_state.get_luks_credentials = Mock(
+            return_value='foo'
+        )
+        self.disk_format.store_to_result(result)
+        assert result.add.call_args_list == [
+            call(
+                compress=False,
+                filename='target_dir/some-disk-image.x86_64-1.2.3.vmdk',
+                key='disk_format_image',
+                shasum=True,
+                use_for_bundle=True
+            ),
+            call(
+                compress=False,
+                filename='target_dir/some-disk-image.x86_64-1.2.3.vmx',
+                key='disk_format_machine_settings',
+                shasum=False,
+                use_for_bundle=True
+            )
+        ]
+        self.xml_state.get_luks_credentials = Mock(
+            return_value=None
+        )
 
     @patch('kiwi.storage.subformat.vmdk.VmwareSettingsTemplate.get_template')
     @patch('kiwi.storage.subformat.vmdk.Command.run')
@@ -177,25 +208,4 @@ class TestDiskFormatVmdk:
         )
         assert m_open.return_value.write.call_args_list[2] == call(
             'custom entry 2' + os.linesep
-        )
-
-    @patch('kiwi.storage.subformat.vmdk.Command.run')
-    @patch('os.path.exists')
-    def test_create_image_format_pvscsi_adapter(
-        self, mock_exists, mock_command
-    ):
-        self.disk_format.patch_header_for_pvscsi = True
-
-        m_open = mock_open(read_data=b'ddb.adapterType = "lsilogic"')
-        with patch('builtins.open', m_open, create=True):
-            self.disk_format.create_image_format()
-
-        assert m_open.call_args_list[0:2] == [
-            call('target_dir/some-disk-image.x86_64-1.2.3.vmdk', 'rb'),
-            call('target_dir/some-disk-image.x86_64-1.2.3.vmdk', 'r+b')
-        ]
-        assert m_open.return_value.seek.called_once_with(512, 0)
-        assert m_open.return_value.read.called_once_with(1024)
-        assert m_open.return_value.write.call_args_list[0] == call(
-            b'ddb.adapterType = "pvscsi"'
         )

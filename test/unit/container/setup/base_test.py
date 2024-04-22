@@ -2,7 +2,6 @@ from mock import (
     patch, call, mock_open
 )
 from pytest import raises
-import mock
 
 from kiwi.container.setup.base import ContainerSetupBase
 
@@ -15,6 +14,10 @@ class TestContainerSetupBase:
         mock_exists.return_value = True
 
         self.container = ContainerSetupBase('root_dir')
+
+    @patch('os.path.exists')
+    def setup_method(self, cls, mock_exists):
+        self.setup()
 
     @patch('os.path.exists')
     def test_container_root_dir_does_not_exist(self, mock_exists):
@@ -98,22 +101,3 @@ class TestContainerSetupBase:
         assert m_open.return_value.write.call_args_list == [
             call('\nconsole\n')
         ]
-
-    @patch('kiwi.container.setup.base.Command.run')
-    @patch('kiwi.container.setup.base.DataSync')
-    def test_setup_static_device_nodes(self, mock_DataSync, mock_command):
-        data = mock.Mock()
-        mock_DataSync.return_value = data
-        self.container.setup_static_device_nodes()
-        mock_DataSync.assert_called_once_with(
-            '/dev/', 'root_dir/dev/'
-        )
-        data.sync_data.assert_called_once_with(
-            options=['-a', '-x', '--devices', '--specials']
-        )
-
-    @patch('kiwi.container.setup.base.Command.run')
-    def test_setup_static_device_nodes_failed(self, mock_command):
-        mock_command.side_effect = Exception
-        with raises(KiwiContainerSetupError):
-            self.container.setup_static_device_nodes()

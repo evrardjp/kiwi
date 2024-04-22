@@ -25,6 +25,37 @@ export LC_ALL=C
 #======================================
 # Common Functions
 #--------------------------------------
+function mountCgroups {
+    mount -t tmpfs cgroup_root /sys/fs/cgroup
+    for group in devices blkio cpuset pids; do
+        mkdir -p /sys/fs/cgroup/"${group}"
+        mount -t cgroup "${group}" -o "${group}" /sys/fs/cgroup/"${group}"
+    done
+}
+
+function umountCgroups {
+    for group in devices blkio cpuset pids; do
+        umount /sys/fs/cgroup/"${group}"
+    done
+    umount /sys/fs/cgroup
+}
+
+function setupContainerRuntime {
+    cat >/etc/containers/containers.conf <<- EOF
+	[engine]
+	no_pivot_root = true
+	events_logger = "none"
+	cgroup_manager = "cgroupfs"
+	EOF
+
+    cat >/etc/containers/storage.conf <<- EOF
+	[storage]
+	driver = "vfs"
+	graphroot = "/var/lib/containers/storage"
+	runroot = "/var/run/containers/storage"
+	EOF
+}
+
 function baseSystemdServiceInstalled {
     local service=$1
     local sd_dirs="
@@ -121,6 +152,50 @@ function baseService {
     else
         baseInsertService "${service}"
     fi
+}
+
+#======================================
+# suseImportBuildKey
+#--------------------------------------
+function suseImportBuildKey {
+    # /.../
+    # Add missing gpg keys to rpm database
+    # ----
+    local KEY
+    local TDIR
+    local KFN
+    local dumpsigs=/usr/lib/rpm/gnupg/dumpsigs
+    TDIR=$(mktemp -d)
+    if [ ! -d "${TDIR}" ]; then
+        echo "suseImportBuildKey: Failed to create temp dir"
+        return
+    fi
+    if [ -d "/usr/lib/rpm/gnupg/keys" ];then
+        pushd "/usr/lib/rpm/gnupg/keys" || return
+    else
+        pushd "${TDIR}" || return
+        if [ -x "${dumpsigs}" ];then
+            ${dumpsigs} /usr/lib/rpm/gnupg/suse-build-key.gpg
+        fi
+    fi
+    for KFN in gpg-pubkey-*.asc; do
+        if [ ! -e "${KFN}" ];then
+            #
+            # check if file exists because if the glob match did
+            # not find files bash will use the glob string as
+            # result and we just continue in this case
+            #
+            continue
+        fi
+        KEY=$(basename "${KFN}" .asc)
+        if rpm -q "${KEY}" >/dev/null; then
+            continue
+        fi
+        echo "Importing ${KEY} to rpm database"
+        rpm --import "${KFN}"
+    done
+    popd || return
+    rm -rf "${TDIR}"
 }
 
 function baseStripLocales {
@@ -279,7 +354,7 @@ function baseStripFirmware {
     local kernel_module
     local firmware
     mkdir -p /lib/firmware-required
-    find "${base}" \( -name "*.ko" -o -name "*.ko.xz" \) -print0 | \
+    find "${base}" \( -name "*.ko" -o -name "*.ko.xz" -o -name "*.ko.zst" -o -name "*.ko.gz" \) -print0 | \
     while IFS= read -r -d $'\0' kernel_module; do
         firmware=$(modinfo "${kernel_module}" | grep ^firmware || :)
         if [ -z "${firmware}" ];then
@@ -291,10 +366,14 @@ function baseStripFirmware {
         fi
         # could be more than one, loop
         for fname in $name ; do
-            for match in /lib/firmware/"${fname}"      \
-                         /lib/firmware/"${fname}".xz   \
-                         /lib/firmware/*/"${fname}"    \
-                         /lib/firmware/*/"${fname}".xz ;do
+            for match in /lib/firmware/"${fname}"       \
+                         /lib/firmware/"${fname}".xz    \
+                         /lib/firmware/"${fname}".gz    \
+                         /lib/firmware/"${fname}".zst   \
+                         /lib/firmware/*/"${fname}"     \
+                         /lib/firmware/*/"${fname}".xz  \
+                         /lib/firmware/*/"${fname}".gz  \
+                         /lib/firmware/*/"${fname}".zst ;do
                 if [ -e "${match}" ];then
                     match="${match//\/lib\/firmware\//}"
                     bmdir=$(dirname "${match}")
@@ -501,13 +580,20 @@ function baseVagrantSetup {
     # insert the default insecure ssh key from here:
     # https://github.com/hashicorp/vagrant/blob/master/keys/vagrant.pub
     mkdir -p /home/vagrant/.ssh/
+    chmod 0700 /home/vagrant/.ssh/
     echo "ssh-rsa AAAAB3NzaC1yc2EAAAABIwAAAQEA6NF8iallvQVp22WDkTkyrtvp9eWW6A8YVr+kz4TjGYe7gHzIw+niNltGEFHzD8+v1I2YJ6oXevct1YeS0o9HZyN1Q9qgCgzUFtdOKLv6IedplqoPkcmF0aYet2PkEDo3MlTBckFXPITAMzF8dJSIFo9D8HfdOV0IAdx4O7PtixWKn5y2hMNG0zQPyUecp4pzC6kivAIhyfHilFR61RGL+GPXQ2MWZWFYbAGjyiYJnAmCP3NOTd0jMZEnDkbUvxhMmBYSdETk1rRgm+R4LOzFUGaHqHDLKLX+FIPKcF96hrucXzcWyLbIbEgE98OHlnVYCzRdK8jlqm8tehUc9c9WhQ== vagrant insecure public key" > /home/vagrant/.ssh/authorized_keys
     chmod 0600 /home/vagrant/.ssh/authorized_keys
     chown -R vagrant:vagrant /home/vagrant/
 
-    # recommended ssh settings for vagrant boxes
-    echo "UseDNS no" >> /etc/ssh/sshd_config
-    echo "GSSAPIAuthentication no" >> /etc/ssh/sshd_config
+    # apply recommended ssh settings for vagrant boxes
+    SSHD_CONFIG=/etc/ssh/sshd_config.d/00-vagrant.conf
+    if [[ ! -d "$(dirname ${SSHD_CONFIG})" ]]; then
+        SSHD_CONFIG=/etc/ssh/sshd_config
+        # prepend the settings, so that they take precedence
+        echo -e "UseDNS no\nGSSAPIAuthentication no\n$(cat ${SSHD_CONFIG})" > ${SSHD_CONFIG}
+    else
+        echo -e "UseDNS no\nGSSAPIAuthentication no" > ${SSHD_CONFIG}
+    fi
 
     # vagrant assumes that it can sudo without a password
     # => add the vagrant user to the sudoers list
@@ -567,7 +653,7 @@ function suseSetupProduct {
     if [ -f /etc/SuSE-brand ];then
         prod=$(head /etc/SuSE-brand -n 1)
     elif [ -f /etc/os-release ];then
-        prod=$(grep "^NAME" /etc/os-release | cut -d '=' -f 2 | cut -d '"' -f 2)
+        prod=$(while read -r line; do if [[ $line =~ ^NAME ]]; then echo "$line"; fi; done < /etc/os-release | cut -d '=' -f 2 | cut -d '"' -f 2)
     fi
     if [ -d /etc/products.d ];then
         pushd /etc/products.d || return
@@ -576,7 +662,14 @@ function suseSetupProduct {
         elif [ -f "SUSE_${prod}.prod" ];then
             ln -sf "SUSE_${prod}.prod" baseproduct
         else
-            prod=$(find . -maxdepth 1 -name "*.prod" 2>/dev/null | tail -n 1)
+            find_prod() {
+                for f in *; do
+                    if [[ $f =~ \.prod$ ]]; then
+                        echo "$f"
+                    fi
+                done
+            }
+            prod=$(find_prod | tail -n 1)
             if [ -f "${prod}" ];then
                 ln -sf "${prod}" baseproduct
             fi
@@ -628,13 +721,13 @@ function baseQuoteFile {
     # create clean input, no empty lines and comments
     grep -v '^$' "${file}" | grep -v '^[ \t]*#' > "${conf}"
     # remove start/stop quoting from values
-    sed -i -e s"#\(^[a-zA-Z0-9_]\+\)=[\"']\(.*\)[\"']#\1=\2#" "${conf}"
+    sed -E -i -e s"#(^[a-zA-Z0-9_]+)=[\"'](.*)[\"']#\1=\2#" "${conf}"
     # remove backslash quotes if any
-    sed -i -e s"#\\\\\(.\)#\1#g" "${conf}"
+    sed -E -i -e s"#\\\\(.)#\1#g" "${conf}"
     # quote simple quotation marks
-    sed -i -e s"#'\+#'\\\\''#g" "${conf}"
+    sed -E -i -e s"#'+#'\\\\''#g" "${conf}"
     # add '...' quoting to values
-    sed -i -e s"#\(^[a-zA-Z0-9_]\+\)=\(.*\)#\1='\2'#" "${conf}"
+    sed -E -i -e s"#(^[a-zA-Z0-9_]+)=(.*)#\1='\2'#" "${conf}"
     mv "${conf}" "${file}"
 }
 
@@ -779,10 +872,12 @@ function Rm {
 }
 
 function deprecated {
-    echo "DEPRECATED: $1() is obsolete"
-    echo "["
-    cat
-    echo "]"
+    {
+        echo "DEPRECATED: $1() is obsolete"
+        echo "["
+        cat
+        echo "]"
+    } >&2
     exit 1
 }
 
@@ -808,12 +903,6 @@ function suseActivateDefaultServices {
 	There is no generic applicable list of default services
 	It is expected that the installation of software handles
 	this properly. Optional services should be handled explicitly
-	EOF
-}
-
-function suseImportBuildKey {
-    deprecated "${FUNCNAME[0]}" <<- EOF
-	This is done by kiwi at call time of zypper
 	EOF
 }
 

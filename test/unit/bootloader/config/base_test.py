@@ -30,6 +30,9 @@ class TestBootLoaderConfigBase:
             self.state, 'root_dir'
         )
 
+    def setup_method(self, cls):
+        self.setup()
+
     def test_write(self):
         with raises(NotImplementedError):
             self.bootloader.write()
@@ -102,12 +105,37 @@ class TestBootLoaderConfigBase:
         assert self.bootloader.failsafe_boot_entry_requested() is False
 
     def test_get_boot_cmdline(self):
-        assert self.bootloader.get_boot_cmdline() == 'splash'
+        assert self.bootloader.get_boot_cmdline(None) == 'splash'
 
     @patch('kiwi.xml_parse.type_.get_kernelcmdline')
     def test_get_boot_cmdline_custom_root(self, mock_cmdline):
         mock_cmdline.return_value = 'root=/dev/myroot'
-        assert self.bootloader.get_boot_cmdline() == 'root=/dev/myroot'
+        with self._caplog.at_level(logging.WARNING):
+            assert self.bootloader.get_boot_cmdline(
+                '/dev/myroot'
+            ) == 'root=/dev/myroot'
+            assert 'Kernel root device explicitly set via kernelcmdline' \
+                in self._caplog.text
+
+    @patch('kiwi.xml_parse.type_.get_kernelcmdline')
+    @patch('kiwi.bootloader.config.base.BlockID')
+    def test_get_boot_cmdline_custom_root_overlay_write(
+        self, mock_BlockID, mock_cmdline
+    ):
+        block_operation = Mock()
+        block_operation.get_blkid.return_value = 'mock'
+        mock_BlockID.return_value = block_operation
+        mock_cmdline.return_value = 'rd.root.overlay.write=/dev/myrw'
+        self.state.build_type.get_overlayroot = Mock(
+            return_value=True
+        )
+        with self._caplog.at_level(logging.WARNING):
+            assert self.bootloader.get_boot_cmdline(
+                '/dev/myroot'
+            ) == 'rd.root.overlay.write=/dev/myrw root=overlay:PARTUUID=mock'
+            print(self._caplog.text)
+            assert 'Overlay write device explicitly set via kernelcmdline' \
+                in self._caplog.text
 
     @patch('kiwi.xml_parse.type_.get_initrd_system')
     @patch('kiwi.bootloader.config.base.BlockID')
@@ -119,7 +147,37 @@ class TestBootLoaderConfigBase:
         mock_BlockID.return_value = block_operation
         mock_initrd.return_value = 'dracut'
         assert self.bootloader.get_boot_cmdline('uuid') == \
-            'splash root=UUID=uuid rw'
+            'splash root=UUID=uuid'
+
+    @patch('kiwi.xml_parse.type_.get_initrd_system')
+    @patch('kiwi.bootloader.config.base.BlockID')
+    def test_get_boot_cmdline_initrd_system_is_dracut_partuuid(
+        self, mock_BlockID, mock_initrd
+    ):
+        block_operation = Mock()
+        block_operation.get_blkid.return_value = 'uuid'
+        mock_BlockID.return_value = block_operation
+        mock_initrd.return_value = 'dracut'
+        self.bootloader.xml_state.build_type.set_devicepersistency(
+            'by-partuuid'
+        )
+        assert self.bootloader.get_boot_cmdline('uuid') == \
+            'splash root=PARTUUID=uuid'
+
+    @patch('kiwi.xml_parse.type_.get_initrd_system')
+    @patch('kiwi.bootloader.config.base.BlockID')
+    def test_get_boot_cmdline_initrd_system_is_dracut_label(
+        self, mock_BlockID, mock_initrd
+    ):
+        block_operation = Mock()
+        block_operation.get_blkid.return_value = 'label'
+        mock_BlockID.return_value = block_operation
+        mock_initrd.return_value = 'dracut'
+        self.bootloader.xml_state.build_type.set_devicepersistency(
+            'by-label'
+        )
+        assert self.bootloader.get_boot_cmdline('uuid') == \
+            'splash root=LABEL=label'
 
     @patch('kiwi.xml_parse.type_.get_initrd_system')
     @patch('kiwi.bootloader.config.base.BlockID')
@@ -127,14 +185,14 @@ class TestBootLoaderConfigBase:
         self, mock_BlockID, mock_initrd
     ):
         block_operation = Mock()
-        block_operation.get_blkid.return_value = 'uuid'
+        block_operation.get_blkid.return_value = 'mock'
         mock_BlockID.return_value = block_operation
         mock_initrd.return_value = 'dracut'
         self.state.build_type.get_overlayroot = Mock(
             return_value=True
         )
-        assert self.bootloader.get_boot_cmdline('uuid') == \
-            'splash root=overlay:UUID=uuid'
+        assert self.bootloader.get_boot_cmdline('/dev/ro', '/dev/rw') == \
+            'splash rd.root.overlay.write=/dev/disk/by-uuid/mock root=overlay:PARTUUID=mock'
 
     @patch('kiwi.xml_parse.type_.get_installboot')
     def test_get_install_image_boot_default(self, mock_installboot):
@@ -279,6 +337,7 @@ class TestBootLoaderConfigBase:
     def test_mount_system_s390(self, mock_MountManager):
         tmp_mount = MagicMock()
         proc_mount = MagicMock()
+        sys_mount = MagicMock()
         dev_mount = MagicMock()
         root_mount = MagicMock()
         root_mount.mountpoint = 'root_mount_point'
@@ -287,7 +346,7 @@ class TestBootLoaderConfigBase:
         boot_mount.device = 'bootdev'
 
         mount_managers = [
-            proc_mount, dev_mount, tmp_mount, boot_mount, root_mount
+            proc_mount, sys_mount, dev_mount, tmp_mount, boot_mount, root_mount
         ]
 
         def mount_managers_effect(**args):
@@ -303,13 +362,15 @@ class TestBootLoaderConfigBase:
             call(device='rootdev'),
             call(device='bootdev', mountpoint='root_mount_point/boot/zipl'),
             call(device='/dev', mountpoint='root_mount_point/dev'),
-            call(device='/proc', mountpoint='root_mount_point/proc')
+            call(device='/proc', mountpoint='root_mount_point/proc'),
+            call(device='/sys', mountpoint='root_mount_point/sys')
         ]
 
     @patch('kiwi.bootloader.config.base.MountManager')
     def test_mount_system(self, mock_MountManager):
         tmp_mount = MagicMock()
         proc_mount = MagicMock()
+        sys_mount = MagicMock()
         dev_mount = MagicMock()
         root_mount = MagicMock()
         root_mount.mountpoint = 'root_mount_point'
@@ -321,7 +382,7 @@ class TestBootLoaderConfigBase:
         volume_mount = MagicMock()
 
         mount_managers = [
-            proc_mount, dev_mount, tmp_mount, volume_mount,
+            proc_mount, sys_mount, dev_mount, tmp_mount, volume_mount,
             efi_mount, boot_mount, root_mount
         ]
 
@@ -336,7 +397,7 @@ class TestBootLoaderConfigBase:
                     'volume_options': 'subvol=@/boot/grub2',
                     'volume_device': 'device'
                 }
-            }
+            }, root_volume_name='root'
         )
         assert mock_MountManager.call_args_list == [
             call(device='rootdev'),
@@ -345,15 +406,19 @@ class TestBootLoaderConfigBase:
             call(device='device', mountpoint='root_mount_point/boot/grub2'),
             call(device='/tmp', mountpoint='root_mount_point/tmp'),
             call(device='/dev', mountpoint='root_mount_point/dev'),
-            call(device='/proc', mountpoint='root_mount_point/proc')
+            call(device='/proc', mountpoint='root_mount_point/proc'),
+            call(device='/sys', mountpoint='root_mount_point/sys')
         ]
-        root_mount.mount.assert_called_once_with()
+        root_mount.mount.assert_called_once_with(
+            options=['subvol=root']
+        )
         boot_mount.mount.assert_called_once_with()
         efi_mount.mount.assert_called_once_with()
         volume_mount.mount.assert_called_once_with(
             options=['subvol=@/boot/grub2']
         )
         proc_mount.bind_mount.assert_called_once_with()
+        sys_mount.bind_mount.assert_called_once_with()
         dev_mount.bind_mount.assert_called_once_with()
 
         del self.bootloader
@@ -362,6 +427,7 @@ class TestBootLoaderConfigBase:
         tmp_mount.umount.assert_called_once_with()
         dev_mount.umount.assert_called_once_with()
         proc_mount.umount.assert_called_once_with()
+        sys_mount.umount.assert_called_once_with()
         efi_mount.umount.assert_called_once_with()
         boot_mount.umount.assert_called_once_with()
         root_mount.umount.assert_called_once_with()

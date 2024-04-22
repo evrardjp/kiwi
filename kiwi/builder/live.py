@@ -17,12 +17,11 @@
 #
 import os
 import logging
-from tempfile import mkdtemp
-from tempfile import NamedTemporaryFile
 from typing import Dict
 import shutil
 
 # project
+from kiwi.utils.temporary import Temporary
 from kiwi.bootloader.config import BootLoaderConfig
 from kiwi.filesystem import FileSystem
 from kiwi.filesystem.isofs import FileSystemIsoFs
@@ -42,6 +41,7 @@ from kiwi.system.kernel import Kernel
 from kiwi.runtime_config import RuntimeConfig
 from kiwi.iso_tools.base import IsoToolsBase
 from kiwi.xml_state import XMLState
+from kiwi.command import Command
 
 from kiwi.exceptions import KiwiLiveBootImageError
 
@@ -61,8 +61,9 @@ class LiveImageBuilder:
         self, xml_state: XMLState, target_dir: str,
         root_dir: str, custom_args: Dict = None
     ):
-        self.media_dir: str = ''
-        self.live_container_dir: str = ''
+        self.bootloader = xml_state.get_build_type_bootloader_name()
+        if self.bootloader != 'systemd_boot':
+            self.bootloader = 'grub2'
         self.arch = Defaults.get_platform_name()
         self.root_dir = root_dir
         self.target_dir = target_dir
@@ -80,7 +81,9 @@ class LiveImageBuilder:
             self.live_type = Defaults.get_default_live_iso_type()
 
         self.boot_image = BootImageDracut(
-            xml_state, target_dir, self.root_dir
+            xml_state,
+            f'{root_dir}/boot' if self.bootloader == 'systemd_boot' else target_dir,
+            self.root_dir
         )
         self.firmware = FirmWare(
             xml_state
@@ -88,6 +91,7 @@ class LiveImageBuilder:
         self.system_setup = SystemSetup(
             xml_state=xml_state, root_dir=self.root_dir
         )
+        self.bundle_format = xml_state.get_build_type_bundle_format()
         self.isoname = ''.join(
             [
                 target_dir, '/',
@@ -115,19 +119,19 @@ class LiveImageBuilder:
         :rtype: instance of :class:`Result`
         """
         # media dir to store CD contents
-        self.media_dir = mkdtemp(
-            prefix='live-media.', dir=self.target_dir
-        )
+        self.media_dir = Temporary(
+            prefix='live-media.', path=self.target_dir
+        ).new_dir()
 
         # unpack cdroot user files to media dir
-        self.system_setup.import_cdroot_files(self.media_dir)
+        self.system_setup.import_cdroot_files(self.media_dir.name)
 
-        rootsize = SystemSize(self.media_dir)
+        rootsize = SystemSize(self.media_dir.name)
 
         # custom iso metadata
         log.info('Using following live ISO metadata:')
         log.info('--> Application id: {0}'.format(self.mbrid.get_id()))
-        log.info('--> Publisher: {0}'.format(Defaults.get_publisher()))
+        log.info('--> Publisher: {0}'.format(self.publisher))
         log.info('--> Volume id: {0}'.format(self.volume_id))
         custom_iso_args = {
             'meta_data': {
@@ -148,10 +152,12 @@ class LiveImageBuilder:
             # for compat boot. The complete bootloader setup will be
             # based on grub
             bootloader_config = BootLoaderConfig.new(
-                'grub2', self.xml_state, root_dir=self.root_dir,
-                boot_dir=self.media_dir, custom_args={
+                self.bootloader, self.xml_state, root_dir=self.root_dir,
+                boot_dir=self.media_dir.name, custom_args={
                     'grub_directory_name':
-                        Defaults.get_grub_boot_directory_name(self.root_dir)
+                        Defaults.get_grub_boot_directory_name(self.root_dir),
+                    'grub_load_command':
+                        'configfile'
                 }
             )
             bootloader_config.setup_live_boot_images(
@@ -163,12 +169,14 @@ class LiveImageBuilder:
             # only.
             bootloader_config = BootLoaderConfig.new(
                 'isolinux', self.xml_state, root_dir=self.root_dir,
-                boot_dir=self.media_dir
+                boot_dir=self.media_dir.name
             )
         IsoToolsBase.setup_media_loader_directory(
-            self.boot_image.boot_root_directory, self.media_dir,
+            self.boot_image.boot_root_directory, self.media_dir.name,
             bootloader_config.get_boot_theme()
         )
+        if self.firmware.bios_mode():
+            Iso(self.media_dir.name).setup_isolinux_boot_path()
         bootloader_config.write_meta_data()
         bootloader_config.setup_live_image_config(
             mbrid=self.mbrid
@@ -177,7 +185,7 @@ class LiveImageBuilder:
 
         # call custom editbootconfig script if present
         self.system_setup.call_edit_boot_config_script(
-            filesystem='iso:{0}'.format(self.media_dir), boot_part_id=1,
+            filesystem='iso:{0}'.format(self.media_dir.name), boot_part_id=1,
             working_directory=self.root_dir
         )
 
@@ -201,10 +209,31 @@ class LiveImageBuilder:
             config_file=self.root_dir + '/etc/dracut.conf.d/02-livecd.conf'
         )
         self.boot_image.create_initrd(self.mbrid)
+        if self.bootloader == 'systemd_boot':
+            # make sure the initrd name follows the dracut naming conventions
+            boot_names = self.boot_image.get_boot_names()
+            if self.boot_image.initrd_filename:
+                Command.run(
+                    [
+                        'mv', self.boot_image.initrd_filename,
+                        self.root_dir + ''.join(
+                            ['/boot/', boot_names.initrd_name]
+                        )
+                    ]
+                )
+
+        # create EFI FAT image
+        if self.firmware.efi_mode():
+            efi_loader = Temporary(
+                prefix='efi-loader.', path=self.target_dir
+            ).new_file()
+            bootloader_config._create_embedded_fat_efi_image(efi_loader.name)
+            custom_iso_args['meta_data']['efi_loader'] = efi_loader.name
 
         # setup kernel file(s) and initrd in ISO boot layout
-        log.info('Setting up kernel file(s) and boot image in ISO boot layout')
-        self._setup_live_iso_kernel_and_initrd()
+        if self.bootloader != 'systemd_boot':
+            log.info('Setting up kernel file(s) and boot image in ISO boot layout')
+            self._setup_live_iso_kernel_and_initrd()
 
         # calculate size and decide if we need UDF
         if rootsize.accumulate_mbyte_file_sizes() > 4096:
@@ -225,7 +254,7 @@ class LiveImageBuilder:
         filesystem_setup = FileSystemSetup(
             self.xml_state, self.root_dir
         )
-        root_image = NamedTemporaryFile()
+        root_image = Temporary().new_file()
         loop_provider = LoopDevice(
             root_image.name,
             filesystem_setup.get_size_mbytes(root_filesystem),
@@ -250,35 +279,36 @@ class LiveImageBuilder:
         live_filesystem.umount()
 
         log.info('--> Creating squashfs container for root image')
-        self.live_container_dir = mkdtemp(
-            prefix='live-container.', dir=self.target_dir
-        )
-        Path.create(self.live_container_dir + '/LiveOS')
+        self.live_container_dir = Temporary(
+            prefix='live-container.', path=self.target_dir
+        ).new_dir()
+        Path.create(self.live_container_dir.name + '/LiveOS')
         shutil.copy(
-            root_image.name, self.live_container_dir + '/LiveOS/rootfs.img'
+            root_image.name, self.live_container_dir.name + '/LiveOS/rootfs.img'
         )
         live_container_image = FileSystem.new(
             name='squashfs',
             device_provider=DeviceProvider(),
-            root_dir=self.live_container_dir,
+            root_dir=self.live_container_dir.name,
             custom_args={
                 'compression':
                     self.xml_state.build_type.get_squashfscompression()
             }
         )
-        container_image = NamedTemporaryFile()
+        container_image = Temporary().new_file()
         live_container_image.create_on_file(
             container_image.name
         )
-        Path.create(self.media_dir + '/LiveOS')
+        Path.create(self.media_dir.name + '/LiveOS')
+        os.chmod(container_image.name, 0o644)
         shutil.copy(
-            container_image.name, self.media_dir + '/LiveOS/squashfs.img'
+            container_image.name, self.media_dir.name + '/LiveOS/squashfs.img'
         )
 
         # create iso filesystem from media_dir
         log.info('Creating live ISO image')
         iso_image = FileSystemIsoFs(
-            device_provider=DeviceProvider(), root_dir=self.media_dir,
+            device_provider=DeviceProvider(), root_dir=self.media_dir.name,
             custom_args=custom_iso_args
         )
         iso_image.create_on_file(self.isoname)
@@ -291,6 +321,8 @@ class LiveImageBuilder:
             self.runtime_config.get_max_size_constraint(),
             self.isoname
         )
+        if self.bundle_format:
+            self.result.add_bundle_format(self.bundle_format)
         self.result.add(
             key='live_image',
             filename=self.isoname,
@@ -332,7 +364,7 @@ class LiveImageBuilder:
         Copy kernel and initrd from the root tree into the iso boot structure
         """
         boot_path = ''.join(
-            [self.media_dir, '/boot/', self.arch, '/loader']
+            [self.media_dir.name, '/boot/', self.arch, '/loader']
         )
         Path.create(boot_path)
 
@@ -358,6 +390,7 @@ class LiveImageBuilder:
 
         # Move initrd to iso filesystem structure
         if os.path.exists(self.boot_image.initrd_filename):
+            os.chmod(self.boot_image.initrd_filename, 0o644)
             shutil.move(
                 self.boot_image.initrd_filename, boot_path + '/initrd'
             )
@@ -368,13 +401,3 @@ class LiveImageBuilder:
                     self.boot_image.boot_root_directory
                 )
             )
-
-    def __del__(self) -> None:
-        if self.media_dir or self.live_container_dir:
-            log.info(
-                'Cleaning up {0} instance'.format(type(self).__name__)
-            )
-            if self.media_dir:
-                Path.wipe(self.media_dir)
-            if self.live_container_dir:
-                Path.wipe(self.live_container_dir)

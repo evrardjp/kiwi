@@ -18,6 +18,9 @@
 import os
 import logging
 import glob
+from typing import (
+    List, Dict, Optional, Union, Any
+)
 from operator import attrgetter
 
 # project
@@ -25,13 +28,12 @@ from kiwi.cli import Cli
 from kiwi.xml_state import XMLState
 from kiwi.xml_description import XMLDescription
 from kiwi.runtime_checker import RuntimeChecker
-from kiwi.runtime_config import RuntimeConfig
 
 from kiwi.exceptions import (
     KiwiConfigFileNotFound
 )
 
-log = logging.getLogger('kiwi')
+log: Any = logging.getLogger('kiwi')
 
 
 class CliTask:
@@ -48,11 +50,11 @@ class CliTask:
         * setup logfile
         * setup color output
     """
-    def __init__(self, should_perform_task_setup=True):
+    def __init__(self, should_perform_task_setup: bool = True) -> None:
         self.cli = Cli()
 
         # initialize runtime checker
-        self.runtime_checker = None
+        self.runtime_checker: Optional[RuntimeChecker] = None
 
         # help requested
         self.cli.show_and_exit_on_help_request()
@@ -66,11 +68,8 @@ class CliTask:
         # get global args
         self.global_args = self.cli.get_global_args()
 
-        # initialize runtime configuration
-        self.runtime_config = RuntimeConfig()
-
         # initialize generic runtime check dicts
-        self.checks_before_command_args = {
+        self.checks_before_command_args: Dict[str, List[str]] = {
             'check_image_version_provided': [],
             'check_efi_mode_for_disk_overlay_correctly_setup': [],
             'check_initrd_selection_required': [],
@@ -91,55 +90,88 @@ class CliTask:
             'check_architecture_supports_iso_firmware_setup': [],
             'check_appx_naming_conventions_valid': [],
             'check_syslinux_installed_if_isolinux_is_used': [],
-            'check_image_type_unique': []
+            'check_image_type_unique': [],
+            'check_include_references_unresolvable': [],
+            'check_luksformat_options_valid': [],
+            'check_partuuid_persistency_type_used_with_mbr': [],
+            'check_efi_fat_image_has_correct_size': []
         }
-        self.checks_after_command_args = {
+        self.checks_after_command_args: Dict[str, List[str]] = {
             'check_repositories_configured': [],
             'check_image_include_repos_publicly_resolvable': []
         }
 
         if should_perform_task_setup:
-            # set log level
-            if self.global_args['--debug']:
-                log.setLogLevel(logging.DEBUG)
-            else:
-                log.setLogLevel(logging.INFO)
-
             # set log file
             if self.global_args['--logfile']:
                 log.set_logfile(
                     self.global_args['--logfile']
                 )
 
+            # set log socket
+            if self.global_args['--logsocket']:
+                log.set_log_socket(
+                    self.global_args['--logsocket']
+                )
+
+            # set log level
+            if self.global_args['--loglevel']:
+                try:
+                    log.setLogLevel(int(self.global_args['--loglevel']))
+                except ValueError:
+                    # Not a numeric log level, stick with the default
+                    # which is INFO
+                    log.setLogLevel(logging.INFO)
+            elif self.global_args['--debug']:
+                log.setLogLevel(logging.DEBUG)
+            else:
+                log.setLogLevel(logging.INFO)
+            if self.global_args['--logfile'] == 'stdout':
+                # deactivate standard console logger by setting
+                # the highest possible log entry level
+                log.setLogLevel(logging.CRITICAL, except_for=['file', 'socket'])
+
+            # set log flags
+            if self.global_args['--debug-run-scripts-in-screen']:
+                log.setLogFlag('run-scripts-in-screen')
+
             if self.global_args['--color-output']:
                 log.set_color_format()
 
-    def load_xml_description(self, description_directory):
+        # initialize runtime configuration
+        # import RuntimeConfig late to make sure the logging setup applies
+        from kiwi.runtime_config import RuntimeConfig
+        self.runtime_config = RuntimeConfig()
+
+    def load_xml_description(
+        self, description_directory: str, kiwi_file: str = ''
+    ) -> None:
         """
         Load, upgrade, validate XML description
 
-        Attributes
+        :param str description_directory:
+            Path to the image description
 
-        * :attr:`xml_data`
-            instance of XML data toplevel domain (image), stateless data
-
-        * :attr:`config_file`
-            used config file path
-
-        * :attr:`xml_state`
-            Instance of XMLState, stateful data
+        :param str kiwi_file:
+            Basename of kiwi file which contains the main
+            image configuration elements. If not specified
+            kiwi searches for a file named config.xml or
+            a file matching .kiwi
         """
         log.info('Loading XML description')
-        config_file = description_directory + '/config.xml'
-        if not os.path.exists(config_file):
-            # alternative config file lookup location
-            config_file = description_directory + '/image/config.xml'
-        if not os.path.exists(config_file):
-            # glob config file search, first match wins
-            glob_match = description_directory + '/*.kiwi'
-            for kiwi_file in sorted(glob.iglob(glob_match)):
-                config_file = kiwi_file
-                break
+        if kiwi_file:
+            config_file = os.sep.join([description_directory, kiwi_file])
+        else:
+            config_file = os.sep.join([description_directory, '/config.xml'])
+            if not os.path.exists(config_file):
+                # alternative config file lookup location
+                config_file = description_directory + '/image/config.xml'
+            if not os.path.exists(config_file):
+                # glob config file search, first match wins
+                glob_match = description_directory + '/*.kiwi'
+                for kiwi_file in sorted(glob.iglob(glob_match)):
+                    config_file = kiwi_file
+                    break
 
         if not os.path.exists(config_file):
             raise KiwiConfigFileNotFound(
@@ -171,7 +203,9 @@ class CliTask:
 
         self.runtime_checker = RuntimeChecker(self.xml_state)
 
-    def quadruple_token(self, option):
+    def quadruple_token(
+        self, option: str
+    ) -> List[Union[bool, str, List[str], None]]:
         """
         Helper method for commandline options of the form --option a,b,c,d
 
@@ -186,9 +220,12 @@ class CliTask:
         """
         return self._ntuple_token(option, 4)
 
-    def sextuple_token(self, option):
+    def tentuple_token(
+        self, option: str
+    ) -> List[Union[bool, str, List[str], None]]:
         """
-        Helper method for commandline options of the form --option a,b,c,d,e,f
+        Helper method for commandline options of the
+        form --option a,b,c,d,e,f,g,h,i,j
 
         Make sure to provide a common result for option values which
         separates the information in a comma separated list of values
@@ -199,9 +236,9 @@ class CliTask:
 
         :rtype: list
         """
-        return self._ntuple_token(option, 6)
+        return self._ntuple_token(option, 10)
 
-    def run_checks(self, checks):
+    def run_checks(self, checks: Dict[str, List[str]]) -> None:
         """
         This method runs the given runtime checks excluding the ones disabled
         in the runtime configuration file.
@@ -217,16 +254,20 @@ class CliTask:
             }.items():
                 attrgetter(method)(self.runtime_checker)(*args)
 
-    def _pop_token(self, tokens):
+    def _pop_token(self, tokens: List[str]) -> Union[bool, str, List[str]]:
         token = tokens.pop(0)
         if len(token) > 0 and token == 'true':
             return True
         elif len(token) > 0 and token == 'false':
             return False
+        elif len(token) > 0 and token.startswith('{'):
+            return token.replace('{', '').replace('}', '').split(';')
         else:
             return token
 
-    def _ntuple_token(self, option, tuple_count):
+    def _ntuple_token(
+        self, option: str, tuple_count: int
+    ) -> List[Union[bool, str, List[str], None]]:
         """
         Helper method for commandline options of the form --option a,b,c,d,e,f
 
@@ -240,7 +281,7 @@ class CliTask:
 
         :rtype: list
         """
-        tokens = option.split(',', tuple_count - 1)
+        tokens = option.split(',', tuple_count - 1) if option else []
         return [
             self._pop_token(tokens) if len(tokens) else None for _ in range(
                 0, tuple_count

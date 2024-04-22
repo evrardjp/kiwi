@@ -18,8 +18,10 @@ SYNOPSIS
        [--clear-cache]
        [--ignore-repos]
        [--ignore-repos-used-for-build]
-       [--set-repo=<source,type,alias,priority,imageinclude,package_gpgcheck>]
-       [--add-repo=<source,type,alias,priority,imageinclude,package_gpgcheck>...]
+       [--set-repo=<source,type,alias,priority,imageinclude,package_gpgcheck,{signing_keys},components,distribution,repo_gpgcheck>]
+       [--set-repo-credentials=<user:pass_or_filename>]
+       [--add-repo=<source,type,alias,priority,imageinclude,package_gpgcheck,{signing_keys},components,distribution,repo_gpgcheck>...]
+       [--add-repo-credentials=<user:pass_or_filename>...]
        [--add-package=<name>...]
        [--add-bootstrap-package=<name>...]
        [--delete-package=<name>...]
@@ -62,12 +64,21 @@ OPTIONS
   specify package to add(install). The option can be specified
   multiple times
 
---add-repo=<source,type,alias,priority,imageinclude,package_gpgcheck>
+--add-repo=<source,type,alias,priority,imageinclude,package_gpgcheck,{signing_keys},components,distribution,repo_gpgcheck>
 
   Add a new repository to the existing repository setup in the XML
   description. This option can be specified multiple times.
   For details about the provided option values see the **--set-repo**
   information below
+
+--add-repo-credentials=<user:pass_or_filename>
+
+  For **uri://user:pass@location** type repositories, set the user and
+  password connected with an add-repo specification. The first
+  add-repo-credentials is connected with the first add-repo
+  specification and so on. If the provided value describes a filename
+  in the filesystem, the first line of that file is read and used
+  as credentials information.
 
 --allow-existing-root
 
@@ -100,7 +111,7 @@ OPTIONS
 --ignore-repos
 
   Ignore all repository configurations from the XML description.
-  Using that option is usally done with a sequence of --add-repo
+  Using that option is usually done with a sequence of --add-repo
   options otherwise there are no repositories available for the
   image build which would lead to an error.
 
@@ -110,7 +121,7 @@ OPTIONS
   configurations which has the imageonly attribute set to true
   will not be ignored.
 
---set-repo=<source,type,alias,priority,imageinclude,package_gpgcheck>
+--set-repo=<source,type,alias,priority,imageinclude,package_gpgcheck,{signing_keys},components,distribution,repo_gpgcheck>
 
   Overwrite the first repository entry in the XML description with the
   provided information:
@@ -127,10 +138,10 @@ OPTIONS
 
   - **alias**
 
-    An alias name for the repository. If not specified kiwi calculates
-    an alias name as result from a sha sum. The sha sum is used to uniquely
-    identify the repository, but not very expressive. We recommend to
-    set an expressive and uniq alias name.
+    An alias name for the repository. If not specified kiwi generate
+    an alias name as result of hex representation from uuid4. The hex 
+    is used to uniquely identify the repository, but not very expressive. 
+    We recommend to set an expressive and uniq alias name.
 
   - **priority**
 
@@ -149,22 +160,48 @@ OPTIONS
     Set to either **true** or **false** to specify if this repository
     should validate the package signatures.
 
+  - **{signing_keys}**
+
+    List of signing_keys enclosed in curly brackets and delimited by 
+    semicolon. The reference to a signing key must be provided as URI
+    format
+
+  - **components**
+
+    Component list for debian based repos as string delimited by a space
+
+  - **distribution**
+
+    Main distribution name for debian based repos
+
+  - **repo_gpgcheck**
+
+    Set to either **true** or **false** to specify if this repository
+    should validate the repository signature.
+
+--set-repo-credentials=<user:pass_or_filename>
+
+  For **uri://user:pass@location** type repositories, set the user and
+  password connected to the set-repo specification. If the provided
+  value describes a filename in the filesystem, the first line of that file
+  is read and used as credentials information.
+
 --set-container-derived-from=<uri>
 
-    overwrite the source location of the base container for the selected
-    image type. The setting is only effective if the configured image type
-    is setup with an initial derived_from reference
+  Overwrite the source location of the base container for the selected
+  image type. The setting is only effective if the configured image type
+  is setup with an initial derived_from reference
 
 --set-container-tag=<name>
 
-    overwrite the container tag in the container configuration.
-    The setting is only effective if the container configuraiton
-    provides an initial tag value
+  Overwrite the container tag in the container configuration.
+  The setting is only effective if the container configuraiton
+  provides an initial tag value
 
 --signing-key=<key-file>
 
   set the key file to be trusted and imported into the package
-  manager database before performing any opertaion. This is useful
+  manager database before performing any operation. This is useful
   if an image build should take and validate repository and package
   signatures during build time. This option can be specified multiple
   times

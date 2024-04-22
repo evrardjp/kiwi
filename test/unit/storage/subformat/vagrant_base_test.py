@@ -48,6 +48,9 @@ class TestDiskFormatVagrantBase:
         assert self.disk_format.image_format == ''
         assert self.disk_format.provider is None
 
+    def setup_method(self, cls):
+        self.setup()
+
     def test_create_box_img_not_implemented(self):
         with raises(NotImplementedError):
             self.disk_format.create_box_img('arbitrary')
@@ -69,10 +72,10 @@ class TestDiskFormatVagrantBase:
             self.disk_format.store_to_result(Mock())
 
     @patch('kiwi.storage.subformat.vagrant_base.Command.run')
-    @patch('kiwi.storage.subformat.vagrant_base.mkdtemp')
+    @patch('kiwi.storage.subformat.vagrant_base.Temporary')
     @patch.object(DiskFormatVagrantBase, 'create_box_img')
     def test_create_image_format(
-        self, mock_create_box_img, mock_mkdtemp, mock_command
+        self, mock_create_box_img, mock_Temporary, mock_command
     ):
         # select an example provider
         self.disk_format.image_format = 'vagrant.libvirt.box'
@@ -89,7 +92,7 @@ class TestDiskFormatVagrantBase:
             end
         ''').strip()
 
-        mock_mkdtemp.return_value = 'tmpdir'
+        mock_Temporary.return_value.new_dir.return_value.name = 'tmpdir'
 
         with patch('builtins.open', create=True) as mock_file:
             mock_file.return_value = MagicMock(spec=io.IOBase)
@@ -114,17 +117,17 @@ class TestDiskFormatVagrantBase:
         )
 
     @patch('kiwi.storage.subformat.vagrant_base.Command.run')
-    @patch('kiwi.storage.subformat.vagrant_base.mkdtemp')
+    @patch('kiwi.storage.subformat.vagrant_base.Temporary')
     @patch.object(DiskFormatVagrantBase, 'create_box_img')
     def test_user_provided_vagrantfile(
-        self, mock_create_box_img, mock_mkdtemp, mock_cmd_run
+        self, mock_create_box_img, mock_Temporary, mock_cmd_run
     ):
         # select an example provider
         self.disk_format.image_format = 'vagrant.virtualbox.box'
         self.disk_format.provider = 'virtualbox'
 
         # deterministic tempdir:
-        mock_mkdtemp.return_value = 'tmpdir'
+        mock_Temporary.return_value.new_dir.return_value.name = 'tmpdir'
 
         self.vagrantconfig.get_embedded_vagrantfile = Mock(
             return_value='example_Vagrantfile'

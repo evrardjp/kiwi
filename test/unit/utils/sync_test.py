@@ -1,4 +1,5 @@
 import os
+import errno
 import logging
 from pytest import fixture
 from stat import ST_MODE
@@ -15,6 +16,9 @@ class TestDataSync:
     def setup(self):
         self.sync = DataSync('source_dir', 'target_dir')
 
+    def setup_method(self, cls):
+        self.setup()
+
     @patch('kiwi.utils.sync.Command.run')
     @patch('kiwi.utils.sync.DataSync.target_supports_extended_attributes')
     @patch('os.chmod')
@@ -26,12 +30,15 @@ class TestDataSync:
         mock_xattr_support.return_value = False
         with self._caplog.at_level(logging.WARNING):
             self.sync.sync_data(
-                options=['-a', '-H', '-X', '-A', '--one-file-system'],
+                options=[
+                    '--archive', '--hard-links', '--xattrs',
+                    '--acls', '--one-file-system'
+                ],
                 exclude=['exclude_me']
             )
             mock_command.assert_called_once_with(
                 [
-                    'rsync', '-a', '-H', '--one-file-system',
+                    'rsync', '--archive', '--hard-links', '--one-file-system',
                     '--exclude', '/exclude_me', 'source_dir', 'target_dir'
                 ]
             )
@@ -39,16 +46,28 @@ class TestDataSync:
                 'target_dir', mock_stat.return_value[ST_MODE]
             )
 
-    @patch('xattr.getxattr')
+    @patch('kiwi.utils.sync.Command.run')
+    @patch('os.chmod')
+    @patch('os.stat')
+    def test_sync_data_force_trailing_slash(
+        self, mock_stat, mock_chmod, mock_command
+    ):
+        mock_stat.return_value = os.stat('.')
+        self.sync.sync_data(force_trailing_slash=True)
+        mock_command.assert_called_once_with(
+            ['rsync', 'source_dir/', 'target_dir']
+        )
+
+    @patch('os.getxattr')
     def test_target_supports_extended_attributes(self, mock_getxattr):
         assert self.sync.target_supports_extended_attributes() is True
         mock_getxattr.assert_called_once_with(
             'target_dir', 'user.mime_type'
         )
 
-    @patch('xattr.getxattr')
+    @patch('os.getxattr')
     def test_target_does_not_support_extended_attributes(self, mock_getxattr):
-        mock_getxattr.side_effect = OSError(
-            """[Errno 95] Operation not supported: b'/boot/efi"""
-        )
+        effect = OSError()
+        effect.errno = errno.ENOTSUP
+        mock_getxattr.side_effect = effect
         assert self.sync.target_supports_extended_attributes() is False

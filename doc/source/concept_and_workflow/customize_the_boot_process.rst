@@ -144,13 +144,34 @@ right before the system rootfs gets mounted.
            inst_hook pre-mount 30 "${moddir}/my-script.sh"
        }
 
+.. note:: Declaring Extra Tools for Hook Scripts
+
+   The install() function called by dracut can define extra tools needed by
+   a defined hook script. The "inst_multiple" command and its parameters
+   inform dracut to include these extra tools/items in the initrd.
+
+   The tools/items defined here can be any file, but are usually executables
+   and libraries needed by the hook script.
+
+   * Each file MUST be included in the Kiwi description either in a
+     package, archive, or in the "root" tree in the image description
+     directory.
+
+   * The parameters of the inst_multiple command are space separated.
+
+   * Each parameter can be a single executable name if it exists in /bin,
+     /sbin, /usr/bin, or /usr/sbin directories.
+
+   * Otherwise, a full pathname to the file is required. This is usually
+     true for libraries and other special files.
+
 That's it! At the time {kiwi} calls dracut the :file:`90my-module` will be taken
 into account and is installed into the generated initrd. At boot time
 systemd calls the scripts as part of the :file:`dracut-pre-mount.service`.
 
 The dracut system offers a lot more possibilities to customize the
 initrd than shown in the example above. For more information, visit
-the `dracut project page <http://people.redhat.com/harald/dracut.html>`_.
+the `dracut project page <https://dracut.wiki.kernel.org/index.php/Main_Page>`_.
 
 
 Boot Image Parameters
@@ -159,6 +180,14 @@ Boot Image Parameters
 A dracut generated initrd in a {kiwi} image build process includes one or
 more of the {kiwi} provided dracut modules. The following list documents
 the available kernel boot parameters for this modules:
+
+``rd.kiwi.term``
+  Exports the TERM variable into the initrd environment. In case
+  the default value for the terminal emulation is not appropriate
+  `rd.kiwi.term` can be used to overwrite the default. The
+  environment is also passed to the systemd unit which calls
+  dialog based programs in {kiwi} dracut code, such that the
+  TERM setting will be effective there too.
 
 ``rd.kiwi.debug``
   Activates the debug log file for the {kiwi} part of
@@ -188,6 +217,19 @@ the available kernel boot parameters for this modules:
   example `/dev/sda` to `/dev/sdi` and the 480G RAID1 configured for
   OS deployment is `/dev/sdj`. With `rd.kiwi.oem.maxdisk=500G` the
   deployment will land on that RAID disk.
+
+``rd.kiwi.oem.installdevice``
+  Configures the disk device that should be used in an OEM
+  installation. This overwrites/resets any other oem device specific
+  settings, e.g oem-device-filter, oem-unattended-id or rd.kiwi.oem.maxdisk
+  from the cmdline and just continues the installation on the given
+  device. However, the device must exist and must be a block special.
+
+.. note:: Non interactive mode activated by rd.kiwi.oem.installdevice
+
+   When setting rd.kiwi.oem.installdevice explicitly on the
+   kernel commandline, {kiwi} will not ask for confirmation
+   of the device and just use it !
 
 ``rd.live.overlay.size``
   Tells a live ISO image the size for the `tmpfs` filesystem that is used

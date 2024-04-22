@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 
-<image schemaversion="7.4" name="kiwi-test-image-azure">
+<image schemaversion="7.5" name="kiwi-test-image-azure">
     <description type="system">
         <author>Marcus Schäfer</author>
         <contact>ms@suse.de</contact>
         <specification>azure test build</specification>
     </description>
     <preferences>
-        <type image="oem" filesystem="xfs" kernelcmdline="USE_BY_UUID_DEVICE_NAMES=1 earlyprintk=ttyS0 console=ttyS0 rootdelay=300 net.ifnames=0 dis_ucode_ldr" devicepersistency="by-uuid" formatoptions="force_size" format="vhd-fixed" vhdfixedtag="22222222-3333-4444-5555-666666666666" bootpartition="true" bootpartsize="1024">
+        <type image="oem" filesystem="xfs" kernelcmdline="USE_BY_UUID_DEVICE_NAMES=1 earlyprintk=ttyS0 console=ttyS0 rootdelay=300 net.ifnames=0 dis_ucode_ldr" devicepersistency="by-uuid" formatoptions="force_size" format="vhd-fixed" vhdfixedtag="22222222-3333-4444-5555-666666666666">
             <oemconfig>
                 <oem-resize>false</oem-resize>
             </oemconfig>
@@ -87,7 +87,6 @@
         <package name="nscd"/>
         <package name="ntp"/>
         <package name="openldap2-client"/>
-        <package name="opie"/>
         <package name="polkit-default-privs"/>
         <package name="prctl"/>
         <package name="procinfo"/>

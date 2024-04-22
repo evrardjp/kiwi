@@ -16,12 +16,15 @@
 # along with kiwi.  If not, see <http://www.gnu.org/licenses/>
 #
 import os
+from typing import (
+    Dict, List, Optional
+)
 
 # project
 from kiwi.iso_tools.base import IsoToolsBase
 from kiwi.path import Path
 from kiwi.command import Command
-from kiwi.exceptions import KiwiIsoToolError
+from kiwi.exceptions import KiwiFileNotFound, KiwiIsoToolError
 from kiwi.defaults import Defaults
 
 
@@ -32,7 +35,7 @@ class IsoToolsXorrIso(IsoToolsBase):
     Implementation of Parameter API for iso creation tools using
     the libburnia project. Addressed here is the tool xorriso
     """
-    def has_iso_hybrid_capability(self):
+    def has_iso_hybrid_capability(self) -> bool:
         """
         Indicate if the iso tool has the capability to embed a
         partition table into the iso such that it can be
@@ -44,7 +47,7 @@ class IsoToolsXorrIso(IsoToolsBase):
         """
         return True
 
-    def get_tool_name(self):
+    def get_tool_name(self) -> str:
         """
         Lookup xorriso in search path
 
@@ -59,7 +62,9 @@ class IsoToolsXorrIso(IsoToolsBase):
 
         raise KiwiIsoToolError('xorriso tool not found')
 
-    def init_iso_creation_parameters(self, custom_args=None):
+    def init_iso_creation_parameters(
+        self, custom_args: Optional[Dict[str, str]] = None
+    ) -> None:
         """
         Create a set of standard parameters
 
@@ -92,25 +97,29 @@ class IsoToolsXorrIso(IsoToolsBase):
 
         if Defaults.is_x86_arch(self.arch):
             if efi_mode:
-                loader_file = os.sep.join(
-                    [
-                        self.boot_path, 'loader',
-                        Defaults.get_isolinux_bios_grub_loader()
-                    ]
-                )
                 mbr_file = os.sep.join(
                     [self.source_dir, self.boot_path, '/loader/boot_hybrid.img']
                 )
-                self.iso_loaders += [
-                    '-boot_image', 'grub', 'bin_path={0}'.format(loader_file),
-                    '-boot_image', 'grub', 'grub2_mbr={0}'.format(mbr_file),
-                    '-boot_image', 'grub', 'grub2_boot_info=on'
-                ]
+                if os.path.exists(mbr_file):
+                    loader_file = os.sep.join(
+                        [
+                            self.boot_path, 'loader',
+                            Defaults.get_isolinux_bios_grub_loader()
+                        ]
+                    )
+                    self.iso_loaders += [
+                        '-boot_image', 'grub', 'bin_path={0}'.format(loader_file),
+                        '-boot_image', 'grub', 'grub2_mbr={0}'.format(mbr_file),
+                        '-boot_image', 'grub', 'grub2_boot_info=on'
+                    ]
             else:
                 loader_file = self.boot_path + '/loader/isolinux.bin'
-                mbr_file = Path.which(
+                mbr_file_c = Path.which(
                     'isohdpfx.bin', Defaults.get_syslinux_search_paths()
                 )
+                if not mbr_file_c:
+                    raise KiwiFileNotFound("isohdpfx.bin not found in the syslinux search paths")
+                mbr_file = mbr_file_c
                 self.iso_loaders += [
                     '-boot_image', 'isolinux', 'bin_path={0}'.format(
                         loader_file
@@ -131,7 +140,7 @@ class IsoToolsXorrIso(IsoToolsBase):
             '-boot_image', 'any', 'load_size=2048'
         ]
 
-    def add_efi_loader_parameters(self):
+    def add_efi_loader_parameters(self, loader_file: str) -> None:
         """
         Add ISO creation parameters to embed the EFI loader
 
@@ -142,18 +151,18 @@ class IsoToolsXorrIso(IsoToolsBase):
         file refer to _create_embedded_fat_efi_image() from
         bootloader/config/grub2.py
         """
-        loader_file = os.sep.join([self.source_dir, self.boot_path, 'efi'])
-        if os.path.exists(loader_file):
-            self.iso_loaders += [
-                '-append_partition', '2', '0xef', loader_file,
-                '-boot_image', 'any', 'next',
-                '-boot_image', 'any',
-                'efi_path=--interval:appended_partition_2:all::',
-                '-boot_image', 'any', 'platform_id=0xef',
-                '-boot_image', 'any', 'emul_type=no_emulation'
-            ]
+        self.iso_loaders += [
+            '-append_partition', '2', '0xef', loader_file,
+            '-boot_image', 'any', 'next',
+            '-boot_image', 'any',
+            'efi_path=--interval:appended_partition_2:all::',
+            '-boot_image', 'any', 'platform_id=0xef',
+            '-boot_image', 'any', 'emul_type=no_emulation'
+        ]
 
-    def create_iso(self, filename, hidden_files=None):
+    def create_iso(
+        self, filename: str, hidden_files: List[str] = None
+    ) -> None:
         """
         Creates the iso file with the given filename using xorriso
 

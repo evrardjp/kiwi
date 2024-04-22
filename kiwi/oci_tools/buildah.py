@@ -68,7 +68,11 @@ class OCIBuildah(OCIBase):
             [
                 'skopeo', 'copy', container_image_ref,
                 'containers-storage:{0}'.format(self.imported_image)
-            ]
+            ] + (
+                [
+                    '--tmpdir', Defaults.get_temp_location()
+                ] if self._skopeo_provides_tmpdir_option() else []
+            )
         )
 
         if not self.working_container:
@@ -90,20 +94,19 @@ class OCIBuildah(OCIBase):
         )
 
     def export_container_image(
-        self, filename, transport, image_ref, additional_refs=None
+        self, filename, transport, image_ref, additional_names=None
     ):
         """
         Exports the working container to a container image archive
 
         :param str filename: The resulting filename
         :param str transport: The archive format
-        :param str image_name: Name of the exported image
-        :param str image_tag: Tag of the exported image
-        :param list additional_tags: List of additional references
+        :param str image_ref: Reference of the exported image
+        :param list additional_names: List of additional references
         """
         extra_tags_opt = []
-        if additional_refs:
-            for ref in additional_refs:
+        if additional_names:
+            for ref in additional_names:
                 extra_tags_opt.extend(['--additional-tag', ref])
 
         # make sure the target tar file does not exist
@@ -118,10 +121,16 @@ class OCIBuildah(OCIBase):
 
         # we are using 'skopeo copy' to export images instead of 'buildah push'
         # because buildah does not support multiple tags
-        Command.run([
-            'skopeo', 'copy', 'containers-storage:{0}'.format(export_image),
-            '{0}:{1}:{2}'.format(transport, filename, image_ref)
-        ] + extra_tags_opt)
+        Command.run(
+            [
+                'skopeo', 'copy', 'containers-storage:{0}'.format(export_image),
+                '{0}:{1}:{2}'.format(transport, filename, image_ref)
+            ] + extra_tags_opt + (
+                [
+                    '--tmpdir', Defaults.get_temp_location()
+                ] if self._skopeo_provides_tmpdir_option() else []
+            )
+        )
 
     def init_container(self):
         """
@@ -161,7 +170,12 @@ class OCIBuildah(OCIBase):
         self._sync_data(
             ''.join([root_dir, os.sep]), self.oci_root_dir,
             exclude_list=exclude_list,
-            options=Defaults.get_sync_options() + ['--delete']
+            options=Defaults.get_sync_options() + [
+                '--filter', '-x! user.*',
+                '--filter', '-x! security.ima*',
+                '--filter', '-x! security.capability*',
+                '--delete'
+            ]
         )
 
     def import_rootfs(self, root_dir, exclude_list=None):

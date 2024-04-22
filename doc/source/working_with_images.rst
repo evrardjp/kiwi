@@ -12,6 +12,7 @@ Working with Images
 
    working_with_images/iso_to_usb_stick_deployment
    working_with_images/iso_to_usb_stick_file_based_deployment
+   working_with_images/iso_to_usb_stick_grub2_boot_from_iso
 
    working_with_images/disk_setup_for_ec2
    working_with_images/disk_setup_for_azure
@@ -22,6 +23,7 @@ Working with Images
 
    working_with_images/custom_partitions
    working_with_images/custom_volumes
+   working_with_images/clone_partitions
 
    working_with_images/setup_network_bootserver
    working_with_images/legacy_netboot_root_filesystem
@@ -33,3 +35,4 @@ Working with Images
    working_with_images/build_with_profiles
    working_with_images/build_in_buildservice
    working_with_images/use_suse_media
+   working_with_images/build_without_debootstrap

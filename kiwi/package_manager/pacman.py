@@ -17,7 +17,9 @@
 #
 import re
 import logging
-from typing import List
+from typing import (
+    List, Dict, Optional
+)
 
 # project
 from kiwi.command import command_call_type
@@ -40,7 +42,7 @@ class PackageManagerPacman(PackageManagerBase):
         pacman command environment from repository
         runtime configuration
     """
-    def post_init(self, custom_args: List = None) -> None:
+    def post_init(self, custom_args: Optional[List[str]] = None) -> None:
         """
         Post initialization method
 
@@ -48,9 +50,7 @@ class PackageManagerPacman(PackageManagerBase):
 
         :param list custom_args: custom pacman arguments
         """
-        self.custom_args = custom_args
-        if not custom_args:
-            self.custom_args = []
+        self.custom_args: List[str] = custom_args or []
 
         runtime_config = self.repository.runtime_config()
         self.pacman_args = runtime_config['pacman_args']
@@ -97,13 +97,25 @@ class PackageManagerPacman(PackageManagerBase):
         """
         self.exclude_requests.append(name)
 
+    def setup_repository_modules(
+        self, collection_modules: Dict[str, List[str]]
+    ) -> None:
+        """
+        Repository modules not supported for pacman.
+        The method does nothing in this scope
+
+        :param dict collection_modules: unused
+        """
+        pass
+
     def process_install_requests_bootstrap(
-        self, root_bind: RootBind = None
+        self, root_bind: RootBind = None, bootstrap_package: str = None
     ) -> command_call_type:
         """
         Process package install requests for bootstrap phase (no chroot)
 
         :param object root_bind: unused
+        :param str bootstrap_package: unused
 
         :return: process results in command type
 

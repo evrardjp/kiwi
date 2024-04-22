@@ -6,9 +6,10 @@ User Defined Scripts
 .. note:: **Abstract**
 
    This chapter describes the purpose of the user defined scripts
-   :file:`config.sh`, :file:`image.sh` and :file:`disk.sh`, which can
-   be used to further customize an image in ways that are not possible
-   via the image description alone.
+   :file:`config.sh`, :file:`image.sh`, :file:`pre_disk_sync.sh`
+   and :file:`disk.sh`, which can be used to further customize an
+   image in ways that are not possible via the image description
+   alone.
 
 {kiwi} supports the following optional scripts that it runs in a
 root environment (chroot) containing your new appliance:
@@ -28,6 +29,23 @@ config.sh
   change of data in the root tree, such as modifying a package provided
   config file.
 
+config-overlay.sh
+  Available only if `delta_root="true"` is set. In this case the
+  script runs at the end of the :ref:`prepare step <prepare-step>`
+  prior the umount of the overlay root tree. It runs after an
+  eventually given `config.sh` and is the last entry point to
+  change the delta root tree.
+
+config-host-overlay.sh
+  Available only if `delta_root="true"` is set. In this case the
+  script runs at the end of the :ref:`prepare step <prepare-step>`
+  prior the umount of the overlay root tree. The script is called
+  **NOT CHROOTED** from the host with the image root directory as
+  its working directory. It runs after an eventually given
+  `config.sh` and is together with an eventually given
+  `config-overlay.sh` script, the last entry point to change the
+  delta root tree.
+
 images.sh
   is executed at the beginning of the :ref:`image
   creation process <create-step>`. It runs in the same image root tree
@@ -37,21 +55,76 @@ images.sh
   a modification to a config file that should be done when building
   a live iso but not when building a virtual disk image.
 
+pre_disk_sync.sh
+  is executed for the disk image type `oem` only and runs
+  right before the synchronization of the root tree into the disk image
+  loop file. The :file:`pre_disk_sync.sh` can be used to change
+  content of the root tree as a last action before the sync to
+  the disk image is performed. This is useful for example to delete
+  components from the system which were needed before or cannot
+  be modified afterwards when syncing into a read-only filesystem.
+
 disk.sh
   is executed for the disk image type `oem` only and runs after the
-  synchronisation of the root tree into the disk image loop file.
-  At call time of the script the device name of the currently mapped
-  root device is passed as a parameter. The chroot environment for
-  this script call is the virtual disk itself and not the root tree
-  as with :file:`config.sh` and :file:`images.sh`. The script :file:`disk.sh`
-  is usually used to apply changes at parts of the system that are not an
-  element of the file based root tree such as the partition table, the
-  bootloader or filesystem attributes.
+  synchronization of the root tree into the disk image loop file.
+  The chroot environment for this script call is the virtual disk itself
+  and not the root tree as with :file:`config.sh` and :file:`images.sh`.
+  The script :file:`disk.sh` is usually used to apply changes at parts of
+  the system that are not an element of the file based root tree such as
+  the partition table, the contents of the final initrd, the bootloader,
+  filesystem attributes and more.
 
 {kiwi} executes scripts via the operating system if their executable
 bit is set (in that case a shebang is mandatory) otherwise they will be
 invoked via the BASH. If a script exits with a non-zero exit code
 then {kiwi} will report the failure and abort the image creation.
+
+Developing/Debugging Scripts
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+When creating a custom script it usually takes some iterations of
+try and testing until a final stable state is reached. To support
+developers with this task {kiwi} calls scripts associated with a
+`screen` session. The connection to `screen` is only done if {kiwi}
+is called with the `--debug` option.
+
+In this mode a script can start like the following template:
+
+.. code:: bash
+
+   # The magic bits are still not set
+
+   echo "break"
+   /bin/bash
+
+At call time of the script a `screen` session executes and you get
+access to the break in shell. From this environment the needed script
+code can be implemented. Once the shell is closed the {kiwi} process
+continues.
+
+Apart from providing a full featured terminal throughout the
+execution of the script code, there is also the advantage to
+have control on the session during the process of the image
+creation. Listing the active sessions for script execution
+can be done as follows:
+
+.. code:: bash
+
+   $ sudo screen -list
+
+   There is a screen on:
+        19699.pts-4.asterix     (Attached)
+   1 Socket in /run/screens/S-root.
+
+.. note::
+
+   As shown above the screen session(s) to execute script code
+   provides extended control which could also be considered a
+   security risk. Because of that {kiwi} only runs scripts through
+   `screen` when explicitly enabled via the `--debug` switch.
+   For production processes all scripts should run in their
+   native way and should not require a terminal to operate
+   correctly !
 
 Script Template for config.sh / images.sh
 -----------------------------------------
@@ -228,74 +301,90 @@ $kiwi_type
   The image type as extracted from the `type` element in
   :file:`config.xml`.
 
+.. note:: **.profile.extra**
+
+   If there is the file :file:`/.profile.extra` available in the
+   initrd, {kiwi} will import this additional environment file
+   after the import of the :file:`/.profile` file.
 
 Configuration Tips
 ------------------
 
 #. **Locale configuration:**
 
-  KIWI in order to set the locale relies on :command:`systemd-firstboot`,
-  which in turn writes the locale configuration file :file:`/etc/locale.conf`.
-  The values for the locale settings are taken from the description XML
-  file in the `<locale>` element under `<preferences>`.
+   KIWI in order to set the locale relies on :command:`systemd-firstboot`,
+   which in turn writes the locale configuration file :file:`/etc/locale.conf`.
+   The values for the locale settings are taken from the description XML
+   file in the `<locale>` element under `<preferences>`.
 
-  KIWI assumes systemd adoption to handle these locale settings, in case the
-  build distribution does not honor `/etc/locale.conf` this is likely to not
-  produce any effect on the locale settings. As an example, in SLE12
-  distribution the locale configuration is already possible by using the
-  systemd toolchain, however this approach overlaps with SUSE specific
-  managers such as YaST. In that case using :command:`systemd-firstboot`
-  is only effective if locales in :file:`/etc/sysconfig/language` are
-  not set or if the file does not exist at all. In SLE12
-  :file:`/etc/sysconfig/language` has precendence over
-  :file:`/etc/locale.conf` for compatibility reasons and management tools
-  could still relay on `sysconfig` files for locale settings.
+   KIWI assumes systemd adoption to handle these locale settings, in case the
+   build distribution does not honor `/etc/locale.conf` this is likely to not
+   produce any effect on the locale settings. As an example, in SLE12
+   distribution the locale configuration is already possible by using the
+   systemd toolchain, however this approach overlaps with SUSE specific
+   managers such as YaST. In that case using :command:`systemd-firstboot`
+   is only effective if locales in :file:`/etc/sysconfig/language` are
+   not set or if the file does not exist at all. In SLE12
+   :file:`/etc/sysconfig/language` has precendence over
+   :file:`/etc/locale.conf` for compatibility reasons and management tools
+   could still relay on `sysconfig` files for locale settings.
 
-  In any case the configuration is still possible in KIWI by using
-  any distribution specific way to configure the locale setting inside the
-  :file:`config.sh` script or by adding any additional configuration file
-  as part of the overlay root-tree.
+   In any case the configuration is still possible in KIWI by using
+   any distribution specific way to configure the locale setting inside the
+   :file:`config.sh` script or by adding any additional configuration file
+   as part of the overlay root-tree.
 
 #. **Stateless systemd UUIDs:**
 
-  Machine ID files are created and set (:file:`/etc/machine-id`,
-  :file:`/var/lib/dbus/machine-id`) during the image package installation
-  when *systemd* and/or *dbus* are installed. Those UUIDs are intended to
-  be unique and set only once in each deployment. {kiwi} follows the `systemd
-  recommendations
-  <https://www.freedesktop.org/software/systemd/man/machine-id.html>`_ and
-  wipes any :file:`/etc/machine-id` content, leaving it as an empty file.
-  Note, this only applies to images based on a dracut initrd, it does not
-  apply for container images.
+   Machine ID files (:file:`/etc/machine-id`, :file:`/var/lib/dbus/machine-id`)
+   may be created and set during the image package installation depending on
+   the distribution. Those UUIDs are intended to be unique and set only once
+   in each deployment.
 
-  In case this setting is also required for a non dracut based image,
-  the same result can achieved by removing :file:`/etc/machine-id` in
-  :file:`config.sh`.
+   If :file:`/etc/machine-id` does not exist or contains the string
+   `uninitialized` (systemd v249 and later), this triggers firstboot behaviour
+   in systemd and services using `ConditionFirstBoot=yes` will run. Unless the
+   file already contains a valid machine ID, systemd will generate one and
+   write it into the file, creating it if necessary. See the `machine-id man
+   page <https://www.freedesktop.org/software/systemd/man/machine-id.html>`_
+   for more details.
 
-  .. note:: Avoid interactive boot
+   Depending on whether firstboot behaviour should be triggered or not,
+   :file:`/etc/machine-id` can be created, removed or filled with
+   `uninitialized` by :file:`config.sh`.
 
-     It is important to remark that the file :file:`/etc/machine-id` is set
-     to an empty file instead of deleting it. :command:`systemd` may
-     trigger :command:`systemd-firstboot` service if this file is not
-     present, which leads to an interactive firstboot where the user is
-     asked to provide some data.
+   To prevent that images include a generated machine ID, KIWI will clear
+   :file:`/etc/machine-id` if it exists and does not contain the string
+   `uninitialized`. This only applies to images based on a dracut initrd, it
+   does not apply for container images.
 
-  .. note:: Avoid inconsistent :file:`/var/lib/dbus/machine-id`
+   .. note:: `rw` might be necessary if :file:`/etc/machine-id` does not exist
 
-     Note that :file:`/etc/machine-id` and :file:`/var/lib/dbus/machine-id`
-     **must** contain the same unique ID. On modern systems
-     :file:`/var/lib/dbus/machine-id` is already a symlink to
-     :file:`/etc/machine-id`. However on older systems those might be two
-     different files. This is the case for SLE-12 based images. If you are
-     targeting these older operating systems, it is recommended to add the
-     symlink creation into :file:`config.sh`:
+      For systemd to be able to write :file:`/etc/machine-id` on boot,
+      it must either exist already (so that a bind mount can be created) or
+      :file:`/etc` must be writable.
 
-     .. code:: bash
+      By default, the root filesystem is mounted read-only by dracut/systemd,
+      thus a missing :file:`/etc/machine-id` will result in an error on boot.
+      The `rw` option can be added to the kernel commandline to force the
+      initial mount to be read-write.
 
-        #======================================
-        # Make machine-id consistent with dbus
-        #--------------------------------------
-        if [ -e /var/lib/dbus/machine-id ]; then
-            rm /var/lib/dbus/machine-id
-        fi
-        ln -s /etc/machine-id /var/lib/dbus/machine-id
+   .. note:: Avoid inconsistent :file:`/var/lib/dbus/machine-id`
+
+      Note that :file:`/etc/machine-id` and :file:`/var/lib/dbus/machine-id`
+      **must** contain the same unique ID. On modern systems
+      :file:`/var/lib/dbus/machine-id` is already a symlink to
+      :file:`/etc/machine-id`. However on older systems those might be two
+      different files. This is the case for SLE-12 based images. If you are
+      targeting these older operating systems, it is recommended to add the
+      symlink creation into :file:`config.sh`:
+
+      .. code:: bash
+
+         #======================================
+         # Make machine-id consistent with dbus
+         #--------------------------------------
+         if [ -e /var/lib/dbus/machine-id ]; then
+             rm /var/lib/dbus/machine-id
+         fi
+         ln -s /etc/machine-id /var/lib/dbus/machine-id

@@ -31,6 +31,11 @@ class TestBootImageKiwi:
             '--list-modules', '--no-kernel'
         ])
 
+    @patch('kiwi.boot.image.dracut.Command.run')
+    @patch('kiwi.boot.image.base.os.path.exists')
+    def setup_method(self, cls, mock_exists, mock_cmd):
+        self.setup()
+
     @patch('kiwi.boot.image.dracut.SystemSetup')
     def test_prepare(self, mock_setup):
         setup = Mock()
@@ -106,8 +111,10 @@ class TestBootImageKiwi:
     @patch('kiwi.boot.image.dracut.Command.run')
     @patch('kiwi.boot.image.base.BootImageBase.is_prepared')
     @patch('kiwi.boot.image.dracut.Profile')
+    @patch('kiwi.boot.image.dracut.MountManager')
     def test_create_initrd(
-        self, mock_Profile, mock_prepared, mock_command, mock_kernel
+        self, mock_MountManager, mock_Profile, mock_prepared,
+        mock_command, mock_kernel
     ):
         profile = Mock()
         profile.dot_profile = dict()
@@ -124,39 +131,56 @@ class TestBootImageKiwi:
         profile.create.assert_called_once_with(
             'system-directory/.profile'
         )
+        assert mock_MountManager.call_args_list == [
+            call(device='/dev', mountpoint='system-directory/dev'),
+            call(device='/proc', mountpoint='system-directory/proc')
+        ]
         assert mock_command.call_args_list == [
-            call([
-                'chroot', 'system-directory',
-                'dracut', '--verbose', '--no-hostonly',
-                '--no-hostonly-cmdline', '--xz',
-                '--add', ' foo ', '--omit', ' bar ',
-                '--install', 'system-directory/etc/foo',
-                'LimeJeOS.x86_64-1.13.2.initrd.xz', '1.2.3'
-            ], stderr_to_stdout=True),
-            call([
-                'mv',
-                'system-directory/'
-                'LimeJeOS.x86_64-1.13.2.initrd.xz',
-                'some-target-dir'
-            ])
+            call(
+                [
+                    'chroot', 'system-directory',
+                    'dracut', '--verbose', '--no-hostonly',
+                    '--no-hostonly-cmdline',
+                    '--add', ' foo ', '--omit', ' bar ',
+                    '--install', 'system-directory/etc/foo',
+                    'LimeJeOS.x86_64-1.13.2.initrd', '1.2.3'
+                ], stderr_to_stdout=True),
+            call(
+                [
+                    'mv',
+                    'system-directory/'
+                    'LimeJeOS.x86_64-1.13.2.initrd',
+                    'some-target-dir'
+                ]
+            )
         ]
         mock_command.reset_mock()
         self.boot_image.create_initrd(basename='foo')
         assert mock_command.call_args_list == [
-            call([
-                'chroot', 'system-directory',
-                'dracut', '--verbose', '--no-hostonly',
-                '--no-hostonly-cmdline', '--xz',
-                '--add', ' foo ', '--omit', ' bar ',
-                '--install', 'system-directory/etc/foo',
-                'foo.xz', '1.2.3'
-            ], stderr_to_stdout=True),
-            call([
-                'mv',
-                'system-directory/foo.xz',
-                'some-target-dir'
-            ])
+            call(
+                [
+                    'chroot', 'system-directory',
+                    'dracut', '--verbose', '--no-hostonly',
+                    '--no-hostonly-cmdline',
+                    '--add', ' foo ', '--omit', ' bar ',
+                    '--install', 'system-directory/etc/foo',
+                    'foo', '1.2.3'
+                ], stderr_to_stdout=True),
+            call(
+                [
+                    'mv',
+                    'system-directory/foo',
+                    'some-target-dir'
+                ]
+            )
         ]
 
     def test_has_initrd_support(self):
         assert self.boot_image.has_initrd_support() is True
+
+    def test_destructor(self):
+        self.boot_image.device_mount = Mock()
+        self.boot_image.proc_mount = Mock()
+        self.boot_image.__del__()
+        self.boot_image.device_mount.umount.assert_called_once_with()
+        self.boot_image.proc_mount.umount.assert_called_once_with()

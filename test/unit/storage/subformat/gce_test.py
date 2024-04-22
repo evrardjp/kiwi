@@ -4,11 +4,13 @@ from mock import (
 import mock
 import kiwi
 
+from kiwi.defaults import Defaults
 from kiwi.storage.subformat.gce import DiskFormatGce
 
 
 class TestDiskFormatGce:
     def setup(self):
+        Defaults.set_platform_name('x86_64')
         xml_data = mock.Mock()
         xml_data.get_name = mock.Mock(
             return_value='some-disk-image'
@@ -27,6 +29,9 @@ class TestDiskFormatGce:
             self.xml_state, 'root_dir', 'target_dir'
         )
 
+    def setup_method(self, cls):
+        self.setup()
+
     def test_post_init(self):
         self.disk_format.post_init({'option': 'value', '--tag': 'tag'})
         assert self.disk_format.tag == 'tag'
@@ -44,11 +49,11 @@ class TestDiskFormatGce:
 
     @patch('kiwi.storage.subformat.gce.Command.run')
     @patch('kiwi.storage.subformat.gce.ArchiveTar')
-    @patch('kiwi.storage.subformat.gce.mkdtemp')
+    @patch('kiwi.storage.subformat.gce.Temporary')
     def test_create_image_format(
-        self, mock_mkdtemp, mock_archive, mock_command
+        self, mock_Temporary, mock_archive, mock_command
     ):
-        mock_mkdtemp.return_value = 'tmpdir'
+        mock_Temporary.return_value.new_dir.return_value.name = 'tmpdir'
         archive = mock.Mock()
         mock_archive.return_value = archive
         self.disk_format.tag = 'gce-license'

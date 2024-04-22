@@ -406,6 +406,12 @@ class KiwiLogFileSetupFailed(KiwiError):
     """
 
 
+class KiwiLogSocketSetupFailed(KiwiError):
+    """
+    Exception raised if the Unix Domain log socket could not be created.
+    """
+
+
 class KiwiLoopSetupError(KiwiError):
     """
     Exception raised if not enough user data to create a
@@ -800,4 +806,51 @@ class KiwiShellVariableValueError(KiwiError):
     """
     Exception raised if a given python value cannot be converted
     into a string representation for use in shell scripts
+    """
+
+
+class KiwiIncludFileNotFoundError(KiwiError):
+    """
+    Exception raised if the file reference in an <include>
+    statement could not be found
+    """
+
+
+class KiwiUmountBusyError(KiwiError):
+    """
+    Exception raised if the attempt to umount a resource has failed
+    """
+
+
+class KiwiCustomPartitionConflictError(KiwiError):
+    """
+    Exception raised if the entry in a custom partition setup
+    conflicts with an existing partition table layout setting
+    """
+
+
+class KiwiVolumeTooSmallError(KiwiError):
+    """
+    Exception raised if the specified volume size is smaller
+    than the required bytes to store the data
+    """
+
+
+class KiwiPartitionTooSmallError(KiwiError):
+    """
+    Exception raised if the specified partition size is smaller
+    than the required bytes to store the data
+    """
+
+
+class KiwiCredentialsError(KiwiError):
+    """
+    Exception raised if required credentials information is missing
+    """
+
+
+class KiwiOffsetError(KiwiError):
+    """
+    Exception raised if the offset for a seek operation does not
+    match the expected data to write
     """

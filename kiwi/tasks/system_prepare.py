@@ -22,8 +22,10 @@ usage: kiwi-ng system prepare -h | --help
            [--clear-cache]
            [--ignore-repos]
            [--ignore-repos-used-for-build]
-           [--set-repo=<source,type,alias,priority,imageinclude,package_gpgcheck>]
-           [--add-repo=<source,type,alias,priority,imageinclude,package_gpgcheck>...]
+           [--set-repo=<source,type,alias,priority,imageinclude,package_gpgcheck,{signing_keys},components,distribution,repo_gpgcheck>]
+           [--set-repo-credentials=<user:pass_or_filename>]
+           [--add-repo=<source,type,alias,priority,imageinclude,package_gpgcheck,{signing_keys},components,distribution,repo_gpgcheck>...]
+           [--add-repo-credentials=<user:pass_or_filename>...]
            [--add-package=<name>...]
            [--add-bootstrap-package=<name>...]
            [--delete-package=<name>...]
@@ -44,9 +46,20 @@ options:
         install the given package name as part of the early bootstrap process
     --add-package=<name>
         install the given package name
-    --add-repo=<source,type,alias,priority,imageinclude,package_gpgcheck>
-        add repository with given source, type, alias, priority,
-        the imageinclude flag and the package_gpgcheck flag
+    --add-repo=<source,type,alias,priority,imageinclude,package_gpgcheck,{signing_keys},components,distribution,repo_gpgcheck>
+        add repository with given source, type, alias,
+        priority, imageinclude(true|false), package_gpgcheck(true|false),
+        list of signing_keys enclosed in curly brackets delimited by a colon,
+        component list for debian based repos as string delimited by a space,
+        main distribution name for debian based repos and
+        repo_gpgcheck(true|false)
+    --add-repo-credentials=<user:pass_or_filename>
+        for uri://user:pass@location type repositories, set the user and
+        password connected with an add-repo specification. The first
+        add-repo-credentials is connected with the first add-repo
+        specification and so on. If the provided value describes a
+        filename in the filesystem, the first line of that file
+        is read and used as credentials information.
     --allow-existing-root
         allow to use an existing root directory. Use with caution
         this could cause an inconsistent root tree if the existing
@@ -79,14 +92,25 @@ options:
         add a container label in the container configuration metadata. It
         overwrites the label with the provided key-value pair in case it was
         already defined in the XML description
-    --set-repo=<source,type,alias,priority,imageinclude,package_gpgcheck>
+    --set-repo=<source,type,alias,priority,imageinclude,package_gpgcheck,{signing_keys},components,distribution,repo_gpgcheck>
         overwrite the first XML listed repository source, type, alias,
-        priority, the imageinclude flag and the package_gpgcheck flag
+        priority, imageinclude(true|false), package_gpgcheck(true|false),
+        list of signing_keys enclosed in curly brackets delimited by a colon,
+        component list for debian based repos as string delimited by a space,
+        main distribution name for debian based repos and
+        repo_gpgcheck(true|false)
+     --set-repo-credentials=<user:pass_or_filename>
+        for uri://user:pass@location type repositories, set the user and
+        password connected to the set-repo specification. If the provided
+        value describes a filename in the filesystem, the first line of that
+        file is read and used as credentials information.
      --signing-key=<key-file>
         includes the key-file as a trusted key for package manager validations
 """
 import os
 import logging
+from itertools import zip_longest
+from urllib.parse import urlparse
 
 # project
 from kiwi.tasks.base import CliTask
@@ -96,6 +120,7 @@ from kiwi.system.prepare import SystemPrepare
 from kiwi.system.setup import SystemSetup
 from kiwi.defaults import Defaults
 from kiwi.system.profile import Profile
+from kiwi.command import Command
 
 log = logging.getLogger('kiwi')
 
@@ -120,7 +145,7 @@ class SystemPrepareTask(CliTask):
         Privileges.check_for_root_permissions()
 
         self.load_xml_description(
-            self.command_args['--description']
+            self.command_args['--description'], self.global_args['--kiwi-file']
         )
 
         abs_root_path = os.path.abspath(self.command_args['--root'])
@@ -140,13 +165,19 @@ class SystemPrepareTask(CliTask):
 
         if self.command_args['--set-repo']:
             self.xml_state.set_repository(
-                *self.sextuple_token(self.command_args['--set-repo'])
+                *self._get_repo_parameters(
+                    self.command_args['--set-repo'],
+                    self.command_args['--set-repo-credentials']
+                )
             )
 
         if self.command_args['--add-repo']:
-            for add_repo in self.command_args['--add-repo']:
+            for add_repo, add_credentials in zip_longest(
+                self.command_args['--add-repo'],
+                self.command_args['--add-repo-credentials']
+            ):
                 self.xml_state.add_repository(
-                    *self.sextuple_token(add_repo)
+                    *self._get_repo_parameters(add_repo, add_credentials)
                 )
 
         if self.command_args['--set-container-tag']:
@@ -180,12 +211,32 @@ class SystemPrepareTask(CliTask):
         )
         manager = system.setup_repositories(
             self.command_args['--clear-cache'],
-            self.command_args['--signing-key'],
+            self.command_args[
+                '--signing-key'
+            ] + self.xml_state.get_repositories_signing_keys(),
             self.global_args['--target-arch']
         )
-        system.install_bootstrap(
-            manager, self.command_args['--add-bootstrap-package']
-        )
+        run_bootstrap = True
+        if self.xml_state.get_package_manager() == 'apt' and \
+           self.command_args['--allow-existing-root']:
+            # try to call apt-get inside of the existing root.
+            # If the call succeeds we skip calling debootstrap again
+            # and assume the root to be ok to proceed with apt-get
+            # if it fails, treat the root as dirty and give the
+            # bootstrap a try
+            try:
+                Command.run(['chroot', abs_root_path, 'apt-get', '--version'])
+                run_bootstrap = False
+                log.warning(
+                    'debootstrap will only be called once, skipped'
+                )
+            except Exception:
+                run_bootstrap = True
+
+        if run_bootstrap:
+            system.install_bootstrap(
+                manager, self.command_args['--add-bootstrap-package']
+            )
 
         setup = SystemSetup(
             self.xml_state, abs_root_path
@@ -236,6 +287,9 @@ class SystemPrepareTask(CliTask):
         # call config.sh script if present
         setup.call_config_script()
 
+        # if configured, assign SELinux labels
+        setup.setup_selinux_file_contexts()
+
         # handle uninstall package requests, gracefully uninstall
         # with dependency cleanup
         system.pinch_system(force=False)
@@ -256,3 +310,23 @@ class SystemPrepareTask(CliTask):
         else:
             return False
         return self.manual
+
+    def _get_repo_parameters(self, tokens, credentials):
+        parameters = self.tentuple_token(tokens)
+        signing_keys_index = 6
+        repo_source_index = 0
+        if not parameters[signing_keys_index]:
+            # make sure to pass empty list for signing_keys param
+            parameters[signing_keys_index] = []
+        if credentials:
+            if os.path.isfile(credentials):
+                credentials_data = open(credentials).readline().strip(os.linesep)
+                os.unlink(credentials)
+                credentials = credentials_data
+            repo_source = parameters[repo_source_index]
+            repo_scheme = urlparse(repo_source).scheme
+            if repo_scheme:
+                repo_source = repo_source.replace(f'{repo_scheme}://', '')
+                repo_source = f'{repo_scheme}://{credentials}@{repo_source}'
+                parameters[repo_source_index] = repo_source
+        return parameters

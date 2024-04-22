@@ -50,6 +50,13 @@ class TestVolumeManagerBase:
         ]
 
     @patch('os.path.exists')
+    def setup_method(self, cls, mock_path):
+        self.setup()
+
+    def test_get_root_volume_name(self):
+        assert self.volume_manager.get_root_volume_name() == '/'
+
+    @patch('os.path.exists')
     def test_init_custom_args(self, mock_exists):
         mock_exists.return_value = True
         volume_manager = VolumeManagerBase(
@@ -232,13 +239,24 @@ class TestVolumeManagerBase:
         )
         data_sync.sync_data.assert_called_once_with(
             exclude=['exclude_me'],
-            options=['-a', '-H', '-X', '-A', '--one-file-system', '--inplace']
+            options=[
+                '--archive', '--hard-links', '--xattrs',
+                '--acls', '--one-file-system', '--inplace'
+            ]
         )
         assert self.volume_manager.get_mountpoint() == 'mountpoint'
 
-    @patch('kiwi.volume_manager.base.mkdtemp')
-    def test_setup_mountpoint(self, mock_mkdtemp):
-        mock_mkdtemp.return_value = 'tmpdir'
+    def test_create_verity_layer(self):
+        with raises(NotImplementedError):
+            self.volume_manager.create_verity_layer()
+
+    def test_create_verification_metadata(self):
+        with raises(NotImplementedError):
+            self.volume_manager.create_verification_metadata('/some/device')
+
+    @patch('kiwi.volume_manager.base.Temporary')
+    def test_setup_mountpoint(self, mock_Temporary):
+        mock_Temporary.return_value.new_dir.return_value.name = 'tmpdir'
         self.volume_manager.setup_mountpoint()
         assert self.volume_manager.mountpoint == 'tmpdir'
 
@@ -259,9 +277,3 @@ class TestVolumeManagerBase:
         mock_command.assert_called_once_with(
             ['chattr', '+C', 'toplevel/etc']
         )
-
-    @patch('kiwi.volume_manager.base.Path.wipe')
-    def test_cleanup_tempdirs(self, mock_Path_wipe):
-        self.volume_manager.temp_directories = ['tmpdir']
-        self.volume_manager._cleanup_tempdirs()
-        mock_Path_wipe.assert_called_once_with('tmpdir')

@@ -75,8 +75,14 @@ class TestImageInfoTask:
         )
         self.task = ImageInfoTask()
 
+    def setup_method(self, cls):
+        self.setup()
+
     def teardown(self):
         sys.argv = argv_kiwi_tests
+
+    def teardown_method(self, cls):
+        self.teardown()
 
     def _init_command_args(self):
         self.task.command_args = {}
@@ -88,6 +94,7 @@ class TestImageInfoTask:
         self.task.command_args['--resolve-package-list'] = False
         self.task.command_args['--print-xml'] = False
         self.task.command_args['--print-yaml'] = False
+        self.task.command_args['--print-toml'] = False
 
     @patch('kiwi.tasks.image_info.DataOutput')
     def test_process_image_info(self, mock_out):
@@ -116,6 +123,9 @@ class TestImageInfoTask:
     def test_process_image_info_resolve_package_list(
         self, mock_get_repo_type, mock_uri, mock_solver_repo_new, mock_out
     ):
+        uri = Mock()
+        uri.uri = 'http://example.org/some/path'
+        mock_uri.return_value = uri
         mock_get_repo_type.return_value = 'apt-deb'
         self.solver.set_dist_type.return_value = {
             'arch': 'amd64'
@@ -127,24 +137,24 @@ class TestImageInfoTask:
 
         assert self.solver.add_repository.called
         assert mock_uri.call_args_list == [
-            call('http://us.archive.ubuntu.com/ubuntu/'),
+            call(uri='http://us.archive.ubuntu.com/ubuntu/', source_type=''),
             call(
                 'http://us.archive.ubuntu.com/ubuntu/dists/focal/'
-                'main/binary-amd64', 'apt-deb'
+                'main/binary-amd64', 'apt-deb', ''
             ),
             call(
                 'http://us.archive.ubuntu.com/ubuntu/dists/focal/'
-                'multiverse/binary-amd64', 'apt-deb'
+                'multiverse/binary-amd64', 'apt-deb', ''
             ),
             call(
                 'http://us.archive.ubuntu.com/ubuntu/dists/focal/'
-                'restricted/binary-amd64', 'apt-deb'
+                'restricted/binary-amd64', 'apt-deb', ''
             ),
             call(
                 'http://us.archive.ubuntu.com/ubuntu/dists/focal/'
-                'universe/binary-amd64', 'apt-deb'
+                'universe/binary-amd64', 'apt-deb', ''
             ),
-            call('obs://Devel:PubCloud:AmazonEC2/SLE_12_GA', 'rpm-md')
+            call('obs://Devel:PubCloud:AmazonEC2/SLE_12_GA', 'rpm-md', '')
         ]
         mock_out.assert_called_once_with(self.result_info)
 
@@ -183,7 +193,7 @@ class TestImageInfoTask:
         self.task.command_args['--print-xml'] = True
         self.task.process()
         tmpfile, message = mock_out.display_file.call_args.args
-        assert tmpfile.startswith('/tmp/xslt-')
+        assert tmpfile.startswith('/var/tmp/kiwi_xslt-')
         assert message == 'Description(XML):'
 
     @patch('kiwi.tasks.image_info.DataOutput')
@@ -192,5 +202,14 @@ class TestImageInfoTask:
         self.task.command_args['--print-yaml'] = True
         self.task.process()
         tmpfile, message = mock_out.display_file.call_args.args
-        assert tmpfile.startswith('/tmp/xslt-')
+        assert tmpfile.startswith('/var/tmp/kiwi_xslt-')
         assert message == 'Description(YAML):'
+
+    @patch('kiwi.tasks.image_info.DataOutput')
+    def test_process_image_info_print_toml(self, mock_out):
+        self._init_command_args()
+        self.task.command_args['--print-toml'] = True
+        self.task.process()
+        tmpfile, message = mock_out.display_file.call_args.args
+        assert tmpfile.startswith('/var/tmp/kiwi_xslt-')
+        assert message == 'Description(TOML):'

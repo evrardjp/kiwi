@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 
-<image schemaversion="7.4" name="kiwi-test-image-ec2">
+<image schemaversion="7.5" name="kiwi-test-image-ec2">
     <description type="system">
         <author>Marcus Schäfer</author>
         <contact>ms@suse.de</contact>
@@ -78,7 +78,6 @@
         <package name="klogd"/>
         <package name="krb5-client"/>
         <package name="ksh"/>
-        <package name="lockdev"/>
         <package name="man"/>
         <package name="man-pages"/>
         <package name="mozilla-nss-certs"/>
@@ -88,7 +87,6 @@
         <package name="nscd"/>
         <package name="ntp"/>
         <package name="openldap2-client"/>
-        <package name="opie"/>
         <package name="polkit-default-privs"/>
         <package name="prctl"/>
         <package name="procinfo"/>

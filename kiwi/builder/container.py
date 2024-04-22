@@ -43,14 +43,20 @@ class ContainerBuilder:
     :param dict custom_args: Custom processing arguments defined as hash keys:
         * xz_options: string of XZ compression parameters
     """
-    def __init__(self, xml_state: XMLState, target_dir: str, root_dir: str, custom_args: Dict = None):
+    def __init__(
+        self, xml_state: XMLState, target_dir: str,
+        root_dir: str, custom_args: Dict = None
+    ):
         self.custom_args = custom_args or {}
         self.root_dir = root_dir
         self.target_dir = target_dir
+        self.bundle_format = xml_state.get_build_type_bundle_format()
         self.container_config = xml_state.get_container_config()
         self.requested_container_type = xml_state.get_build_type_name()
+        self.delta_root = xml_state.build_type.get_delta_root()
         self.base_image = None
         self.base_image_md5 = None
+        self.ensure_empty_tmpdirs = True
 
         self.container_config['xz_options'] = \
             self.custom_args.get('xz_options')
@@ -58,7 +64,7 @@ class ContainerBuilder:
         self.container_config['metadata_path'] = \
             xml_state.build_type.get_metadata_path()
 
-        if xml_state.get_derived_from_image_uri():
+        if xml_state.get_derived_from_image_uri() and not self.delta_root:
             # The base image is expected to be unpacked by the kiwi
             # prepare step and stored inside of the root_dir/image directory.
             # In addition a md5 file of the image is expected too
@@ -79,6 +85,9 @@ class ContainerBuilder:
                         self.base_image_md5
                     )
                 )
+
+        if xml_state.build_type.get_ensure_empty_tmpdirs() is False:
+            self.ensure_empty_tmpdirs = False
 
         self.system_setup = SystemSetup(
             xml_state=xml_state, root_dir=self.root_dir
@@ -136,12 +145,17 @@ class ContainerBuilder:
             self.requested_container_type, self.root_dir, self.container_config
         )
         self.filename = container_image.create(
-            self.filename, self.base_image
+            self.filename, self.base_image or '', self.ensure_empty_tmpdirs,
+            self.runtime_config.get_container_compression()
+            # appx containers already contains a compressed root
+            if self.requested_container_type != 'appx' else False
         )
         Result.verify_image_size(
             self.runtime_config.get_max_size_constraint(),
             self.filename
         )
+        if self.bundle_format:
+            self.result.add_bundle_format(self.bundle_format)
         self.result.add(
             key='container',
             filename=self.filename,
@@ -149,31 +163,32 @@ class ContainerBuilder:
             compress=False,
             shasum=True
         )
-        self.result.add(
-            key='image_packages',
-            filename=self.system_setup.export_package_list(
-                self.target_dir
-            ),
-            use_for_bundle=True,
-            compress=False,
-            shasum=False
-        )
-        self.result.add(
-            key='image_changes',
-            filename=self.system_setup.export_package_changes(
-                self.target_dir
-            ),
-            use_for_bundle=True,
-            compress=True,
-            shasum=False
-        )
-        self.result.add(
-            key='image_verified',
-            filename=self.system_setup.export_package_verification(
-                self.target_dir
-            ),
-            use_for_bundle=True,
-            compress=False,
-            shasum=False
-        )
+        if not self.delta_root:
+            self.result.add(
+                key='image_packages',
+                filename=self.system_setup.export_package_list(
+                    self.target_dir
+                ),
+                use_for_bundle=True,
+                compress=False,
+                shasum=False
+            )
+            self.result.add(
+                key='image_changes',
+                filename=self.system_setup.export_package_changes(
+                    self.target_dir
+                ),
+                use_for_bundle=True,
+                compress=True,
+                shasum=False
+            )
+            self.result.add(
+                key='image_verified',
+                filename=self.system_setup.export_package_verification(
+                    self.target_dir
+                ),
+                use_for_bundle=True,
+                compress=False,
+                shasum=False
+            )
         return self.result

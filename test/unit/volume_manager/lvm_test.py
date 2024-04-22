@@ -22,27 +22,27 @@ class TestVolumeManagerLVM:
     def setup(self, mock_path):
         self.volumes = [
             volume_type(
-                name='LVRoot', size='freespace:100', realpath='/',
+                name='LVRoot', parent='', size='freespace:100', realpath='/',
                 mountpoint=None, fullsize=False, label=None, attributes=[],
                 is_root_volume=True
             ),
             volume_type(
-                name='LVSwap', size='size:100', realpath='swap',
+                name='LVSwap', parent='', size='size:100', realpath='swap',
                 mountpoint=None, fullsize=False, label='SWAP', attributes=[],
                 is_root_volume=False
             ),
             volume_type(
-                name='LVetc', size='freespace:200', realpath='/etc',
+                name='LVetc', parent='', size='freespace:200', realpath='/etc',
                 mountpoint='/etc', fullsize=False, label='etc', attributes=[],
                 is_root_volume=False
             ),
             volume_type(
-                name='myvol', size='size:500', realpath='/data',
+                name='myvol', parent='', size='size:500', realpath='/data',
                 mountpoint='LVdata', fullsize=False, label=None, attributes=[],
                 is_root_volume=False
             ),
             volume_type(
-                name='LVhome', size=None, realpath='/home',
+                name='LVhome', parent='', size=None, realpath='/home',
                 mountpoint='/home', fullsize=True, label=None, attributes=[],
                 is_root_volume=False
             ),
@@ -62,6 +62,10 @@ class TestVolumeManagerLVM:
             {'some-arg': 'some-val', 'fs_mount_options': ['a,b,c']}
         )
         assert self.volume_manager.mount_options == 'a,b,c'
+
+    @patch('os.path.exists')
+    def setup_method(self, cls, mock_path):
+        self.setup()
 
     def test_post_init_custom_args(self):
         self.volume_manager.post_init({'some-arg': 'some-val'})
@@ -93,9 +97,9 @@ class TestVolumeManagerLVM:
             '/dev/lvswap'
 
     @patch('kiwi.volume_manager.lvm.Command.run')
-    @patch('kiwi.volume_manager.base.mkdtemp')
-    def test_setup(self, mock_mkdtemp, mock_command):
-        mock_mkdtemp.return_value = 'tmpdir'
+    @patch('kiwi.volume_manager.base.Temporary')
+    def test_setup(self, mock_Temporary, mock_command):
+        mock_Temporary.return_value.new_dir.return_value.name = 'tmpdir'
         command = Mock()
         # no output for commands to mock empty information for
         # vgs command, indicating the volume group is not in use
@@ -128,8 +132,10 @@ class TestVolumeManagerLVM:
         self.volume_manager.volume_group = None
 
     @patch('kiwi.volume_manager.lvm.Command.run')
-    @patch('kiwi.volume_manager.base.mkdtemp')
-    def test_setup_volume_group_host_conflict(self, mock_mkdtemp, mock_command):
+    @patch('kiwi.volume_manager.base.Temporary')
+    def test_setup_volume_group_host_conflict(
+        self, mock_Temporary, mock_command
+    ):
         command = Mock()
         command.output = 'some_data_about_volume_group'
         mock_command.return_value = command
@@ -172,28 +178,28 @@ class TestVolumeManagerLVM:
         assert mock_attrs.call_args_list == [
             call(
                 'root_dir', volume_type(
-                    name='LVSwap', size='size:100', realpath='swap',
+                    name='LVSwap', parent='', size='size:100', realpath='swap',
                     mountpoint=None, fullsize=False, label='SWAP',
                     attributes=[], is_root_volume=False
                 )
             ),
             call(
                 'root_dir', volume_type(
-                    name='LVRoot', size='freespace:100', realpath='/',
+                    name='LVRoot', parent='', size='freespace:100', realpath='/',
                     mountpoint=None, fullsize=False, label=None,
                     attributes=[], is_root_volume=True
                 )
             ),
             call(
                 'root_dir', volume_type(
-                    name='myvol', size='size:500', realpath='/data',
+                    name='myvol', parent='', size='size:500', realpath='/data',
                     mountpoint='LVdata', fullsize=False, label=None,
                     attributes=[], is_root_volume=False
                 )
             ),
             call(
                 'root_dir', volume_type(
-                    name='LVetc', size='freespace:200', realpath='/etc',
+                    name='LVetc', parent='', size='freespace:200', realpath='/etc',
                     mountpoint='/etc', fullsize=False, label='etc',
                     attributes=[], is_root_volume=False
                 )
@@ -313,7 +319,7 @@ class TestVolumeManagerLVM:
     def test_get_volumes(self):
         volume_mount = Mock()
         volume_mount.mountpoint = \
-            '/tmp/kiwi_volumes.f2qx_d3y/boot/grub2/x86_64-efi'
+            '/var/tmp/kiwi_volumes.f2qx_d3y/boot/grub2/x86_64-efi'
         volume_mount.device = '/dev/mapper/vg1-LVRoot'
         self.volume_manager.mount_list = [volume_mount]
         assert self.volume_manager.get_volumes() == {
@@ -327,7 +333,7 @@ class TestVolumeManagerLVM:
         self.volume_manager.volume_group = 'vgroup'
         self.volume_manager._add_to_volume_map('device')
         volume_mount = Mock()
-        volume_mount.mountpoint = '/tmp/kiwi_volumes.XXX/var/tmp'
+        volume_mount.mountpoint = '/var/tmp/kiwi_volumes.XXX/var/tmp'
         volume_mount.device = self.volume_manager.volume_map['device']
         self.volume_manager.mount_list = [volume_mount]
         assert self.volume_manager.get_fstab(None, 'ext3') == [
@@ -336,6 +342,7 @@ class TestVolumeManagerLVM:
         self.volumes.append(
             volume_type(
                 name='device',
+                parent='',
                 size='freespace:100',
                 realpath='/var/tmp',
                 mountpoint=volume_mount.mountpoint,
@@ -349,9 +356,8 @@ class TestVolumeManagerLVM:
             '/dev/vgroup/device /var/tmp ext3 a,b,c 0 2'
         ]
 
-    @patch('kiwi.volume_manager.lvm.Path.wipe')
     @patch('kiwi.volume_manager.lvm.Command.run')
-    def test_destructor_busy_volumes(self, mock_command, mock_wipe):
+    def test_destructor_busy_volumes(self, mock_command):
         self.volume_manager.mountpoint = 'tmpdir'
         self.volume_manager.volume_group = 'volume_group'
         volume_mount = Mock()
@@ -367,10 +373,9 @@ class TestVolumeManagerLVM:
         self.volume_manager.volume_group = None
 
     @patch('kiwi.volume_manager.lvm.VolumeManagerLVM.umount_volumes')
-    @patch('kiwi.volume_manager.lvm.Path.wipe')
     @patch('kiwi.volume_manager.lvm.Command.run')
     def test_destructor(
-        self, mock_command, mock_wipe, mock_umount_volumes
+        self, mock_command, mock_umount_volumes
     ):
         mock_umount_volumes.return_value = True
         mock_command.side_effect = Exception
@@ -380,7 +385,6 @@ class TestVolumeManagerLVM:
         with self._caplog.at_level(logging.WARNING):
             self.volume_manager.__del__()
             mock_umount_volumes.assert_called_once_with()
-            mock_wipe.assert_called_once_with('tmpdir')
             mock_command.assert_called_once_with(
                 ['vgchange'] + self.volume_manager.lvm_tool_options + [
                     '-an', 'volume_group'
